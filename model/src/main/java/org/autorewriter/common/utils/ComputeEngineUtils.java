@@ -33,6 +33,8 @@ public class ComputeEngineUtils {
                 return NullCollation.LOW;
             case CLICKHOUSE:
                 return NullCollation.LAST;
+            case REWRITE_RULE:
+                return NullCollation.LOW; // Default to LOW for rule validation
             default:
                 throw new IllegalArgumentException("No null collation for computeEngine: [" + computeEngine + "] found");
         }

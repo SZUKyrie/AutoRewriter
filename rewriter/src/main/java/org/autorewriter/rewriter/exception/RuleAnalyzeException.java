@@ -8,7 +8,15 @@ public class RuleAnalyzeException extends AutoRewriterException {
         super(ErrorCode.RULE_ANALYZE_ERROR, message);
     }
 
+    public RuleAnalyzeException(String message, Throwable cause) {
+        super(ErrorCode.RULE_ANALYZE_ERROR, message, cause);
+    }
+
     public RuleAnalyzeException(ErrorCode errorCode, String message) {
         super(errorCode, message);
+    }
+
+    public RuleAnalyzeException(ErrorCode errorCode, String message, Throwable cause) {
+        super(errorCode, message, cause);
     }
 }

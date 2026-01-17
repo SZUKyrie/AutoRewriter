@@ -1,30 +1,44 @@
 package org.autorewriter.rewriter.analyze;
 
-import lombok.AllArgsConstructor;
 import lombok.Getter;
 import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.tools.Planner;
-import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment;
+import org.apache.shardingsphere.sql.parser.api.ASTNode;
 
-import java.util.Collection;
+import java.util.*;
 
 /**
- * Context that contains information during analysis phase
- *
- * @author wangyanjing <wangyanjing@kuaishou.com>
- * Created on 2024-07-31
+ * Context containing the analysis result of a rewrite rule.
+ * Includes source and target RelNodes, match constraints, and rewrite constraints.
  */
 @Getter
-@AllArgsConstructor
 public class RuleAnalysisContext {
 
-    private final Planner planner;
+    private final RelNode sourceRelNode;
+    private final RelNode targetRelNode;
 
-    private RelNode sourceRelNode;
+    /**
+     * Match constraints: used during matching phase to validate bindings.
+     * Parameters come from source template only.
+     */
+    private final List<ASTNode> matchConstraints;
 
-    private RelNode targetRelNode;
+    /**
+     * Rewrite constraints: used during rewrite phase to transform bindings.
+     * Parameters can come from both source and target templates.
+     */
+    private final List<ASTNode> rewriteConstraints;
 
-    private Collection<ConstraintSegment> checkConstraints;
-
-    private Collection<ConstraintSegment> transformConstraints;
+    public RuleAnalysisContext(
+            RelNode sourceRelNode,
+            RelNode targetRelNode,
+            Collection<? extends ASTNode> matchConstraints,
+            Collection<? extends ASTNode> rewriteConstraints) {
+        this.sourceRelNode = sourceRelNode;
+        this.targetRelNode = targetRelNode;
+        this.matchConstraints = matchConstraints != null ?
+            new ArrayList<>(matchConstraints) : Collections.emptyList();
+        this.rewriteConstraints = rewriteConstraints != null ?
+            new ArrayList<>(rewriteConstraints) : Collections.emptyList();
+    }
 }
+

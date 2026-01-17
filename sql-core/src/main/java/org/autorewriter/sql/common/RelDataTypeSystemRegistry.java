@@ -13,6 +13,7 @@ public class RelDataTypeSystemRegistry {
     static {
         REGISTRY.put(TableEngine.CLICKHOUSE, RelDataTypeSystem.DEFAULT);
         REGISTRY.put(TableEngine.POSTGRESQL, RelDataTypeSystem.DEFAULT);
+        REGISTRY.put(TableEngine.REWRITE_RULE, RelDataTypeSystem.DEFAULT);
     }
 
     public static RelDataTypeSystem getRelDataTypeSystem(TableEngine tableEngine) {
