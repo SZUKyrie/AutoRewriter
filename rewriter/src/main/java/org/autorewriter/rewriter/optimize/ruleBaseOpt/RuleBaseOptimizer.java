@@ -15,24 +15,6 @@ import java.util.List;
 
 /**
  * Rule-based optimizer using Calcite's HepPlanner.
- *
- * <p>This optimizer allows registering custom rewrite rules (AutoRewriteRule)
- * and applying them to query plans for optimization.</p>
- *
- * <p>Key features:</p>
- * <ul>
- *   <li>Register multiple rewrite rules</li>
- *   <li>Apply rules to RelNode query plans</li>
- *   <li>Support different matching strategies (top-down, bottom-up, etc.)</li>
- *   <li>Control rule application order and iterations</li>
- * </ul>
- *
- * <p>Example usage:</p>
- * <pre>{@code
- * RuleBaseOptimizer optimizer = new RuleBaseOptimizer();
- * optimizer.addRule(myRewriteRule);
- * RelNode optimizedPlan = optimizer.optimize(originalPlan);
- * }</pre>
  */
 @Setter
 @Getter

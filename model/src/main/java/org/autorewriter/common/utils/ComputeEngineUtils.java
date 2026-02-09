@@ -29,7 +29,6 @@ public class ComputeEngineUtils {
         switch (computeEngine) {
             case POSTGRESQL:
             case SPARK:
-            case HIVE:
                 return NullCollation.LOW;
             case CLICKHOUSE:
                 return NullCollation.LAST;

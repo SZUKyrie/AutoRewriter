@@ -15,8 +15,6 @@ public enum TableEngine {
 
     public ComputeEngine getDefaultComputeEngine() {
         switch (this) {
-            case HIVE:
-                return ComputeEngine.HIVE;
             case CLICKHOUSE:
                 return ComputeEngine.CLICKHOUSE;
             case POSTGRESQL:

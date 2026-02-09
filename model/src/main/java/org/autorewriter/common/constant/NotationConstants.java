@@ -1,11 +1,5 @@
 package org.autorewriter.common.constant;
 
-/**
- * Notation constants definition
- *
- * @author wangyanjing <wangyanjing@kuaishou.com>
- * Created on 2024-07-05
- */
 public class NotationConstants {
 
     public static final String OPEN_PARENTHESIS = "(";

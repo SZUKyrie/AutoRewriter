@@ -7,6 +7,10 @@ import org.apache.calcite.plan.RelOptRuleOperand;
 import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.*;
+import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.rel.type.RelDataTypeField;
+import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexCall;
@@ -15,9 +19,6 @@ import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
 
 import java.util.*;
 
-/**
- * Auto rewrite rule that matches source template RelNode and rewrites to target template RelNode.
- */
 @Slf4j
 public class AutoRewriteRule extends RelOptRule {
 
@@ -61,10 +62,63 @@ public class AutoRewriteRule extends RelOptRule {
             call.rel(0).getClass().getSimpleName(),
             rewrittenNode.getClass().getSimpleName());
 
-        // Directly transform without type adjustment
-        // Rule-based rewriting should preserve semantic equivalence
-        // Type changes (e.g., nullability from LEFT JOIN -> INNER JOIN) are correct
-        call.transformTo(rewrittenNode);
+        // Adjust row type to match original node if needed (e.g., LEFT JOIN -> INNER JOIN changes nullability)
+        RelNode originalNode = call.rel(0);
+        RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
+
+        call.transformTo(adjustedNode);
+    }
+
+    /**
+     * Adjust the row type of the rewritten node to match the expected row type.
+     * This is needed when the transformation changes nullability (e.g., LEFT JOIN -> INNER JOIN).
+     *
+     * @param node         the rewritten node
+     * @param expectedType the expected row type from the original node
+     * @return the adjusted node with matching row type, or the original node if types already match
+     */
+    private RelNode adjustRowType(RelNode node, RelDataType expectedType) {
+        RelDataType actualType = node.getRowType();
+
+        // If types are equal, no adjustment needed
+        if (actualType.equals(expectedType)) {
+            return node;
+        }
+
+        // Check if only nullability differs
+        if (actualType.getFieldCount() != expectedType.getFieldCount()) {
+            log.warn("Field count mismatch: expected {}, actual {}",
+                expectedType.getFieldCount(), actualType.getFieldCount());
+            return node;
+        }
+
+        // Create a Project with CAST expressions to adjust nullability
+        RexBuilder rexBuilder = node.getCluster().getRexBuilder();
+        RelDataTypeFactory typeFactory = node.getCluster().getTypeFactory();
+
+        List<RexNode> castExprs = new ArrayList<>();
+        List<String> fieldNames = new ArrayList<>();
+
+        for (int i = 0; i < expectedType.getFieldCount(); i++) {
+            RelDataTypeField expectedField = expectedType.getFieldList().get(i);
+            RelDataTypeField actualField = actualType.getFieldList().get(i);
+
+            RexNode inputRef = rexBuilder.makeInputRef(actualField.getType(), i);
+
+            // If nullability differs, create a type with the expected nullability
+            if (expectedField.getType().isNullable() != actualField.getType().isNullable()) {
+                RelDataType targetType = typeFactory.createTypeWithNullability(
+                    actualField.getType(), expectedField.getType().isNullable());
+                castExprs.add(rexBuilder.makeCast(targetType, inputRef));
+            } else {
+                castExprs.add(inputRef);
+            }
+
+            fieldNames.add(expectedField.getName());
+        }
+
+        // Create a LogicalProject to adjust the types
+        return LogicalProject.create(node, Collections.emptyList(), castExprs, fieldNames);
     }
 
 
@@ -83,7 +137,12 @@ public class AutoRewriteRule extends RelOptRule {
         // Unwrap HepRelVertex if present
         query = unwrapHepVertex(query);
 
+        log.info("recursiveMatch: template={}, query={}",
+            template.getClass().getSimpleName(), query.getClass().getSimpleName());
+
         if (!template.getClass().equals(query.getClass())) {
+            log.info("Class mismatch: {} != {}",
+                template.getClass().getSimpleName(), query.getClass().getSimpleName());
             return false;
         }
 
@@ -156,11 +215,48 @@ public class AutoRewriteRule extends RelOptRule {
     }
 
     private boolean matchFilter(LogicalFilter template, LogicalFilter query, Map<String, Object> bindings) {
+        log.info("matchFilter: template condition={}, query condition={}",
+            template.getCondition(), query.getCondition());
+
         if (!recursiveMatch(template.getInput(), query.getInput(), bindings)) {
+            log.info("matchFilter: input match failed");
             return false;
         }
 
-        return matchRexNode(template.getCondition(), query.getCondition(), bindings);
+        // Match the condition
+        boolean result = matchRexNode(template.getCondition(), query.getCondition(), bindings);
+
+        // Extract and bind attribute names from the filter condition
+        // For example, Filter<p0 a0> should bind a0 to the field being filtered
+        if (result && template.getCondition() instanceof RexCall) {
+            extractAndBindAttributes(template.getCondition(), query.getCondition(), bindings);
+        }
+
+        return result;
+    }
+
+    /**
+     * Extract and bind attribute names from RexNode expressions.
+     * This is needed for constraints like AttrsEq(a0, a1) to work properly.
+     */
+    private void extractAndBindAttributes(RexNode template, RexNode query, Map<String, Object> bindings) {
+        if (template instanceof RexInputRef && query instanceof RexInputRef) {
+            RexInputRef templateRef = (RexInputRef) template;
+            RexInputRef queryRef = (RexInputRef) query;
+
+            String attrName = "a" + templateRef.getIndex();
+            // Bind the attribute name to the field reference itself
+            bindings.put(attrName, queryRef);
+            log.debug("Bound attribute {} to field index {}", attrName, queryRef.getIndex());
+        } else if (template instanceof RexCall && query instanceof RexCall) {
+            RexCall templateCall = (RexCall) template;
+            RexCall queryCall = (RexCall) query;
+
+            // Recursively process operands
+            for (int i = 0; i < templateCall.getOperands().size() && i < queryCall.getOperands().size(); i++) {
+                extractAndBindAttributes(templateCall.getOperands().get(i), queryCall.getOperands().get(i), bindings);
+            }
+        }
     }
 
     private boolean matchJoin(LogicalJoin template, LogicalJoin query, Map<String, Object> bindings) {
@@ -253,8 +349,137 @@ public class AutoRewriteRule extends RelOptRule {
             return true;
         }
 
-        // TODO: Implement constraint evaluation
+        log.debug("Checking {} match constraints with bindings: {}", matchConstraints.size(), bindings.keySet());
+
+        for (ASTNode constraint : matchConstraints) {
+            if (constraint instanceof org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment) {
+                org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment cs =
+                    (org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment) constraint;
+
+                String constraintType = cs.getType().name();
+                String[] params = cs.getParams();
+
+                if (params == null || params.length < 2) {
+                    continue;
+                }
+
+                boolean satisfied = evaluateMatchConstraint(constraintType, params, bindings);
+                if (!satisfied) {
+                    log.debug("Constraint {} failed with params: {}", constraintType, Arrays.toString(params));
+                    return false;
+                }
+            }
+        }
+
         return true;
+    }
+
+    /**
+     * Evaluate a single match constraint.
+     */
+    private boolean evaluateMatchConstraint(String constraintType, String[] params, Map<String, Object> bindings) {
+        switch (constraintType) {
+            case "PREDICATE_EQ":
+                return evaluatePredicateEq(params[0], params[1], bindings);
+            case "ATTRS_EQ":
+                return evaluateAttrsEq(params[0], params[1], bindings);
+            case "ATTRS_SUB":
+                return bindings.containsKey(params[0]) || bindings.containsKey(params[0] + "_index");
+            case "TABLE_EQ":
+                return evaluateTableEq(params[0], params[1], bindings);
+            case "UNIQUE":
+            case "NOT_NULL":
+            case "REFERENCE":
+                // These constraints require metadata - for now, assume true
+                // TODO: Implement metadata-based constraint checking
+                return true;
+            default:
+                log.debug("Unknown constraint type: {}", constraintType);
+                return true;
+        }
+    }
+
+    /**
+     * Check if two predicates are equivalent.
+     */
+    private boolean evaluatePredicateEq(String p1, String p2, Map<String, Object> bindings) {
+        Object pred1 = bindings.get(p1);
+        Object pred2 = bindings.get(p2);
+
+        if (pred1 == null || pred2 == null) {
+            log.debug("PredicateEq: {} or {} not bound", p1, p2);
+            return false;
+        }
+
+        if (pred1 instanceof RexNode && pred2 instanceof RexNode) {
+            // Compare RexNode string representations for equality
+            String str1 = pred1.toString();
+            String str2 = pred2.toString();
+            boolean eq = str1.equals(str2);
+            log.debug("PredicateEq({}, {}): {} vs {} = {}", p1, p2, str1, str2, eq);
+            return eq;
+        }
+
+        return pred1.equals(pred2);
+    }
+
+    /**
+     * Check if two attributes are equivalent.
+     */
+    private boolean evaluateAttrsEq(String a1, String a2, Map<String, Object> bindings) {
+        // Check indexed bindings first
+        Object idx1 = bindings.get(a1 + "_index");
+        Object idx2 = bindings.get(a2 + "_index");
+
+        if (idx1 != null && idx2 != null) {
+            boolean eq = idx1.equals(idx2);
+            log.debug("AttrsEq({}, {}): index {} vs {} = {}", a1, a2, idx1, idx2, eq);
+            return eq;
+        }
+
+        // Check direct bindings (RexInputRef objects)
+        Object val1 = bindings.get(a1);
+        Object val2 = bindings.get(a2);
+
+        if (val1 != null && val2 != null) {
+            // If both are RexInputRef, compare their indices
+            if (val1 instanceof RexInputRef && val2 instanceof RexInputRef) {
+                RexInputRef ref1 = (RexInputRef) val1;
+                RexInputRef ref2 = (RexInputRef) val2;
+                boolean eq = ref1.getIndex() == ref2.getIndex();
+                log.debug("AttrsEq({}, {}): RexInputRef {} vs {} = {}", a1, a2, ref1.getIndex(), ref2.getIndex(), eq);
+                return eq;
+            }
+
+            // For other types, use equals
+            boolean eq = val1.equals(val2);
+            log.debug("AttrsEq({}, {}): {} vs {} = {}", a1, a2, val1, val2, eq);
+            return eq;
+        }
+
+        // If one is bound and one is not, they can't be equal
+        log.debug("AttrsEq({}, {}): one or both not bound (val1={}, val2={})", a1, a2, val1, val2);
+        return false;
+    }
+
+    /**
+     * Check if two tables are the same.
+     */
+    private boolean evaluateTableEq(String t1, String t2, Map<String, Object> bindings) {
+        Object table1 = bindings.get(t1);
+        Object table2 = bindings.get(t2);
+
+        if (table1 == null || table2 == null) {
+            return false;
+        }
+
+        if (table1 instanceof LogicalTableScan && table2 instanceof LogicalTableScan) {
+            String name1 = ((LogicalTableScan) table1).getTable().getQualifiedName().toString();
+            String name2 = ((LogicalTableScan) table2).getTable().getQualifiedName().toString();
+            return name1.equals(name2);
+        }
+
+        return table1.equals(table2);
     }
 
     private Map<String, Object> applyRewriteConstraints(Map<String, Object> sourceBindings) {

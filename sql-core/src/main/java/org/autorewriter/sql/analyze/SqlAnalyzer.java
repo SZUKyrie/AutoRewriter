@@ -8,6 +8,8 @@ import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Planner;
+import org.apache.commons.lang3.exception.ExceptionUtils;
+import org.apache.shardingsphere.sqlfederation.autorewriter.MultiDialectSqlParser;
 import org.autorewriter.common.enums.ComputeEngine;
 import org.autorewriter.common.utils.ComputeEngineUtils;
 import org.autorewriter.meta.schema.CalciteSchemaRegistry;
@@ -22,32 +24,30 @@ import static org.autorewriter.sql.analyze.AnalysisConfigs.*;
 public class SqlAnalyzer {
     public static AnalysisContext analyze(String query, ComputeEngine computeEngine)
             throws SqlParseException, SqlAnalyzeException {
-        Planner planner = getPlanner(computeEngine);
-        SqlNode parsedNode;
-        try {
-            parsedNode = planner.parse(query);
-        } catch (Exception e) {
-            throw new SqlParseException(e);
-        }
-
-        try {
-            SqlNode validateNode = planner.validate(parsedNode);
-            RelNode relNode = planner.rel(validateNode).project();
-            return new AnalysisContext(planner, relNode);
-        } catch (Exception e) {
-            throw new SqlAnalyzeException("SQL validate error: " + e.getMessage());
-        }
+        SqlNode parsedNode = parse(query, computeEngine);
+        return analyze(parsedNode, computeEngine);
     }
 
     public static AnalysisContext analyze(SqlNode queryNode, ComputeEngine computeEngine)
             throws SqlAnalyzeException {
         try {
             Planner planner = getPlanner(computeEngine);
+            Preconditions.checkArgument(planner instanceof MultiDialectPlanner, "Planner can not analyze SqlNode except MultiDialectPlanner");
+            ((MultiDialectPlanner) planner).skipParse();
             SqlNode validatedNode = planner.validate(queryNode);
             RelNode relNode = planner.rel(validatedNode).project();
             return new AnalysisContext(planner, relNode);
         } catch (Exception e) {
-            throw new SqlAnalyzeException("SQL validate error: " + e.getMessage());
+            throw new SqlAnalyzeException(ExceptionUtils.getStackTrace(e));
+        }
+    }
+
+    public static SqlNode parse(String sql, ComputeEngine computeEngine) throws SqlParseException {
+        try {
+            MultiDialectSqlParser parser = MultiDialectSqlParserFactory.createParser(computeEngine);
+            return parser.parse(sql);
+        } catch (Exception e) {
+            throw new SqlParseException(e);
         }
     }
 

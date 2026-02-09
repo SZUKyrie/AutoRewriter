@@ -9,8 +9,6 @@ import lombok.Getter;
 @Getter
 public enum ComputeEngine {
     SPARK,
-    FLINK,
-    HIVE,
     CLICKHOUSE,
     POSTGRESQL,
     REWRITE_RULE;
@@ -27,7 +25,6 @@ public enum ComputeEngine {
     public TableEngine getTableEngine() {
         switch (this) {
             case SPARK:
-            case HIVE:
                 return TableEngine.HIVE;
             case CLICKHOUSE:
                 return TableEngine.CLICKHOUSE;
@@ -42,14 +39,12 @@ public enum ComputeEngine {
 
     public String getDialectName() {
         switch (this) {
-            case HIVE:
-                return "Hive";
             case CLICKHOUSE:
                 return "ClickHouse";
             case SPARK:
                 return "Spark";
             case POSTGRESQL:
-                return "Postgres";
+                return "PostgreSQL";
             default:
                 throw new IllegalArgumentException("unsupported table engine: " + this);
         }
@@ -61,8 +56,6 @@ public enum ComputeEngine {
             case CLICKHOUSE:
             case SPARK:
                 return true;
-            case HIVE:
-                return false;
             default:
                 throw new IllegalArgumentException("No parser for computeEngine: [" + this + "] found");
         }
