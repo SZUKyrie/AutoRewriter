@@ -401,4 +401,119 @@ public class RuleBaseOptimizerTest {
             e.printStackTrace();
         }
     }
+
+    /**
+     * Test 11: Verify that Input<t0> can match complex RelNode subtrees, not just base tables.
+     *
+     * <p>This test demonstrates that template placeholders like Input<t0> can match:
+     * - Base tables (LogicalTableScan)
+     * - Filtered tables (LogicalFilter -> LogicalTableScan)
+     * - Projected tables (LogicalProject -> LogicalTableScan)
+     * - Any other RelNode subtree
+     * </p>
+     *
+     * <p>Rule: Filter<p0 a0>(Input<t0>) -> Input<t1></p>
+     * <p>Condition: The filter can be eliminated (e.g., always true condition)</p>
+     */
+    @Test
+    public void testInputPlaceholderMatchesSubtree() {
+        String testName = "Input Placeholder Matches Complex Subtree";
+        // Rule: Filter(Input) -> Input (for demonstration, we match any filter and remove it)
+        // In practice, you'd add constraints to ensure the filter is removable
+        String ruleStr = "Filter<p0 a0>(Input<t0>)|Input<t1>|TableEq(t1,t0);AttrsSub(a0,t0)";
+
+        RuleAnalysisContext ruleContext = RuleAnalyzer.analyze(ruleStr);
+        assertNotNull(ruleContext);
+
+        AutoRewriteRule rule = new AutoRewriteRule(
+            RelOptRule.operand(org.apache.calcite.rel.logical.LogicalFilter.class, RelOptRule.any()),
+            ruleContext
+        );
+
+        RuleBaseOptimizer optimizer = new RuleBaseOptimizer();
+        optimizer.addRule(rule);
+        assertEquals(1, optimizer.getRuleCount());
+
+        try {
+            relBuilder.clear();
+
+            // Create a complex subtree: JOIN query (customers JOIN orders)
+            // This represents a derived table query that cannot be directly matched by a simple TableScan
+            // SQL equivalent: SELECT c.id, c.name, o.order_id FROM customers c JOIN orders o ON c.id = o.customer_id
+            RelNode complexSubtree = relBuilder
+                .scan("customers")
+                .scan("orders")
+                .join(
+                    org.apache.calcite.rel.core.JoinRelType.INNER,
+                    relBuilder.equals(
+                        relBuilder.field(2, 0, "id"),
+                        relBuilder.field(2, 1, "customer_id")
+                    )
+                )
+                .project(
+                    relBuilder.field(0),  // customers.id
+                    relBuilder.field(1),  // customers.name
+                    relBuilder.field(4)   // orders.order_id
+                )
+                .build();
+
+            // Wrap the complex JOIN subtree with a filter: id > 100
+            // SQL equivalent: SELECT * FROM (SELECT c.id, c.name, o.order_id FROM customers c JOIN orders o ...) t0 WHERE id > 100
+            relBuilder.clear();
+            RelNode query = relBuilder
+                .push(complexSubtree)
+                .filter(
+                    relBuilder.call(
+                        org.apache.calcite.sql.fun.SqlStdOperatorTable.GREATER_THAN,
+                        relBuilder.field("id"),
+                        relBuilder.literal(100)
+                    )
+                )
+                .build();
+
+            RelNode optimized = optimizer.optimize(query);
+            assertNotNull(optimized);
+
+            // Print detailed explanation
+            System.out.println();
+            System.out.println(DOUBLE_SEPARATOR);
+            System.out.println("TEST: " + testName);
+            System.out.println(DOUBLE_SEPARATOR);
+            System.out.println("\n[EXPLANATION]");
+            System.out.println("This test verifies that Input<t0> in the template can match:");
+            System.out.println("  - Not just LogicalTableScan (base table)");
+            System.out.println("  - But also complex RelNode subtrees like JOIN queries");
+            System.out.println("  - In this case: LogicalProject(LogicalJoin(customers, orders))");
+            System.out.println("\nOriginal query structure:");
+            System.out.println("  LogicalFilter (id > 100)");
+            System.out.println("    LogicalProject (id, name, order_id)");
+            System.out.println("      LogicalJoin (customers.id = orders.customer_id)");
+            System.out.println("        LogicalTableScan (customers)");
+            System.out.println("        LogicalTableScan (orders)");
+            System.out.println("\nSQL Equivalent:");
+            System.out.println("  SELECT * FROM (");
+            System.out.println("    SELECT c.id, c.name, o.order_id");
+            System.out.println("    FROM customers c JOIN orders o ON c.id = o.customer_id");
+            System.out.println("  ) t0 WHERE id > 100");
+            System.out.println("\nThe rule Filter<p0 a0>(Input<t0>) -> Input<t1> should match:");
+            System.out.println("  - Filter<p0 a0> matches the outer LogicalFilter (id > 100)");
+            System.out.println("  - Input<t0> matches the entire JOIN subtree: LogicalProject(LogicalJoin(...))");
+            System.out.println("  - The rewrite produces: LogicalProject(LogicalJoin(...)) (filter removed)");
+
+            printUnifiedOutput(testName, ruleStr, query, optimized);
+
+            // Verify that the optimized result is the complex subtree (filter removed)
+            boolean changed = !query.explain().equals(optimized.explain());
+            assertTrue(changed, "The query should have been rewritten (outer filter removed)");
+
+            // Verify the optimized result is a LogicalProject (the top of our complex JOIN subtree)
+            assertTrue(optimized instanceof org.apache.calcite.rel.logical.LogicalProject,
+                "After removing the outer filter, the result should be the LogicalProject subtree");
+
+        } catch (Exception e) {
+            System.out.println("Test failed: " + e.getMessage());
+            e.printStackTrace();
+            fail("Test should not throw exception: " + e.getMessage());
+        }
+    }
 }
