@@ -73,18 +73,24 @@ public class SingleRuleRewriteTest extends PostgresqlSchemaTestBase{
         RuleBaseOptimizer optimizer = new RuleBaseOptimizer();
         optimizer.addRule(rule);
 
-        AnalysisContext analysisContext = SqlAnalyzer.analyze(sql, ComputeEngine.POSTGRESQL);
-        RelNode query = analysisContext.getRelNode();
+        try {
+            AnalysisContext analysisContext = SqlAnalyzer.analyze(sql, ComputeEngine.POSTGRESQL);
+            RelNode query = analysisContext.getRelNode();
 
-        RelNode optimized = optimizer.optimize(query);
-        assertNotNull(optimized);
-        assertEquals("SELECT *\n" +
-                "FROM `test_table`\n" +
-                "WHERE `user_id` > 100", relNodeToSql(optimized).trim());
-        assertEquals("LogicalProject(user_id=[$0], name=[$1], pid=[$2], money=[$3], disable=[$4], status=[$5], days=[$6], factor=[$7], word_list=[$8], p_date=[$9])\n" +
-                "  LogicalFilter(condition=[>($0, 100)])\n" +
-                "    LogicalTableScan(table=[[test_table]])", optimized.explain().trim());
-        //printUnifiedOutput(testName, ruleStr, query, optimized);
+            RelNode optimized = optimizer.optimize(query);
+            assertNotNull(optimized);
+            assertEquals("SELECT *\n" +
+                    "FROM `test_table`\n" +
+                    "WHERE `user_id` > 100", relNodeToSql(optimized).trim());
+            assertEquals("LogicalProject(user_id=[$0], name=[$1], pid=[$2], money=[$3], disable=[$4], status=[$5], days=[$6], factor=[$7], word_list=[$8], p_date=[$9])\n" +
+                    "  LogicalFilter(condition=[>($0, 100)])\n" +
+                    "    LogicalTableScan(table=[[test_table]])", optimized.explain().trim());
+            //printUnifiedOutput(testName, ruleStr, query, optimized);
+        } catch (Exception e) {
+            System.out.println("Test failed: " + e.getMessage());
+            e.printStackTrace();
+            fail("Test failed: " + e.getMessage());
+        }
     }
 
     /**

@@ -5,6 +5,9 @@ import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.autorewriter.common.entity.ColumnDataType;
 
+/**
+ * Convert DB's ColumnDataType to CaRelDataType
+ * */
 public abstract class AbstractColumnDataTypeConverter implements ColumnDataTypeConverter {
 
     protected RelDataTypeFactory relDataTypeFactory;

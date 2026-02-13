@@ -31,12 +31,14 @@ buildNumber.properties
 *.iml
 *.ipr
 out/
+*.txt
 
 # Eclipse
 .classpath
 .project
 .settings/
 bin/
+docs/
 
 # VS Code
 .vscode/

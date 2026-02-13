@@ -11,6 +11,7 @@ public enum ComputeEngine {
     SPARK,
     CLICKHOUSE,
     POSTGRESQL,
+    HIVE,
     REWRITE_RULE;
 
     public static ComputeEngine fromString(String name) {
@@ -25,6 +26,7 @@ public enum ComputeEngine {
     public TableEngine getTableEngine() {
         switch (this) {
             case SPARK:
+            case HIVE:
                 return TableEngine.HIVE;
             case CLICKHOUSE:
                 return TableEngine.CLICKHOUSE;
@@ -45,6 +47,8 @@ public enum ComputeEngine {
                 return "Spark";
             case POSTGRESQL:
                 return "PostgreSQL";
+            case HIVE:
+                return "Hive";
             default:
                 throw new IllegalArgumentException("unsupported table engine: " + this);
         }
@@ -55,6 +59,7 @@ public enum ComputeEngine {
             case POSTGRESQL:
             case CLICKHOUSE:
             case SPARK:
+            case HIVE:
                 return true;
             default:
                 throw new IllegalArgumentException("No parser for computeEngine: [" + this + "] found");

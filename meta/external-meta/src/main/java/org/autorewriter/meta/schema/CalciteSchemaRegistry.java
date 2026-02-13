@@ -1,16 +1,77 @@
 package org.autorewriter.meta.schema;
 
+import com.google.common.collect.ImmutableList;
+import org.apache.calcite.adapter.jdbc.JdbcSchema;
 import org.apache.calcite.jdbc.CalciteSchema;
+import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.sql.type.SqlTypeFactoryImpl;
+import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.autorewriter.common.enums.TableEngine;
+import org.autorewriter.meta.schema.postgres.PostgresConnectionConfig;
+import org.autorewriter.meta.schema.postgres.PostgresConnectionManager;
+import org.autorewriter.meta.schema.postgres.PostgresSchemaService;
+import org.autorewriter.meta.schema.postgres.PostgresJdbcSchemaService;
 
+import javax.sql.DataSource;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.autorewriter.common.constant.NotationConstants.EMPTY_STRING;
+
 public class CalciteSchemaRegistry {
-    private static final Map<TableEngine, CalciteSchema> ENGINE_SCHEMA_MAP = new HashMap();
+    private static final Map<TableEngine, CalciteSchema> ENGINE_SCHEMA_MAP = new HashMap<>();
 
+    /**
+     * Initialize PostgreSQL schema with JDBC connection
+     *
+     * @param configName configuration name for this PostgreSQL instance
+     * @param config PostgreSQL connection configuration
+     */
+    public static void initPostgresSchema(String configName, PostgresConnectionConfig config) {
+        PostgresConnectionManager.registerConfig(configName, config);
+
+        PostgresSchemaService schemaService = new PostgresSchemaService(configName);
+        ProxySchema proxySchema = new ProxySchema(ImmutableList.of(), schemaService);
+
+        CalciteSchema rootSchema = CalciteSchema.createRootSchema(false, false, "", proxySchema);
+        ENGINE_SCHEMA_MAP.put(TableEngine.POSTGRESQL, rootSchema);
+    }
+
+    /**
+     * Initialize PostgreSQL schema with JDBC DataSource
+     * 参考 adaptiveengine 的 H2 初始化方式
+     *
+     * @param dataSource JDBC DataSource
+     * @param typeFactory RelDataTypeFactory for type conversions
+     */
+    public static void initPostgresSchemaWithDataSource(DataSource dataSource, RelDataTypeFactory typeFactory) {
+        PostgresJdbcSchemaService schemaService = new PostgresJdbcSchemaService(dataSource, typeFactory);
+        ProxySchema proxySchema = new ProxySchema(ImmutableList.of(), schemaService);
+
+        KwaiCalciteSchema kwaiCalciteSchema = new KwaiCalciteSchema(null, proxySchema, EMPTY_STRING);
+        ENGINE_SCHEMA_MAP.put(TableEngine.POSTGRESQL, kwaiCalciteSchema);
+    }
+
+    /**
+     * Initialize PostgreSQL schema with JDBC URL (convenience method)
+     *
+     * @param url JDBC URL (e.g., "jdbc:postgresql://localhost:5432/mydb")
+     * @param username database username
+     * @param password database password
+     */
+    public static void initPostgresSchemaWithJdbcUrl(String url, String username, String password) {
+        String driverClassName = "org.postgresql.Driver";
+        DataSource dataSource = JdbcSchema.dataSource(url, driverClassName, username, password);
+        RelDataTypeFactory typeFactory = new SqlTypeFactoryImpl(RelDataTypeSystem.DEFAULT);
+        initPostgresSchemaWithDataSource(dataSource, typeFactory);
+    }
+
+    /**
+     * Initialize PostgreSQL schema with default configuration
+     */
     private static void initPostgresSchema() {
-
+        // This method can be used for default initialization if needed
+        // Currently left empty as initialization should be done explicitly
     }
 
     /**
