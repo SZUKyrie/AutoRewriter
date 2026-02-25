@@ -5,6 +5,8 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.LogicalTableScan;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.schema.Table;
+import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.shardingsphere.sql.parser.api.ASTNode;
 
 import java.util.Arrays;
@@ -55,14 +57,81 @@ public class ConstraintEvaluator {
             case "TABLE_EQ":
                 return evaluateTableEq(params[0], params[1], bindings);
             case "UNIQUE":
+                return evaluateUnique(params[0], params[1], bindings);
             case "NOT_NULL":
+                return evaluateNotNull(params[0], params[1], bindings);
             case "REFERENCE":
-                return true;
+                if (params.length < 4) return true;
+                return evaluateTableEq(params[0], params[2], bindings)
+                        && evaluateAttrsEq(params[1], params[3], bindings);
             default:
                 log.debug("Unknown constraint type: {}", constraintType);
                 return true;
         }
     }
+
+    private boolean evaluateNotNull(String tableParam, String attrParam, Map<String, Object> bindings) {
+        Object tableBinding = bindings.get(tableParam);
+        if (!(tableBinding instanceof LogicalTableScan)) {
+            log.debug("NotNull({}, {}): table not bound to LogicalTableScan, skipping", tableParam, attrParam);
+            return true;
+        }
+        LogicalTableScan scan = (LogicalTableScan) tableBinding;
+
+        Object idxObj = bindings.get(attrParam + "_index");
+        if (!(idxObj instanceof Integer)) {
+            log.debug("NotNull({}, {}): column index not bound, skipping", tableParam, attrParam);
+            return true;
+        }
+        int colIdx = (Integer) idxObj;
+
+        // Column nullability is carried directly in the RelOptTable row type
+        org.apache.calcite.rel.type.RelDataType rowType = scan.getTable().getRowType();
+        List<org.apache.calcite.rel.type.RelDataTypeField> fields = rowType.getFieldList();
+        if (colIdx >= fields.size()) {
+            log.debug("NotNull({}, {}): column index {} out of range ({})", tableParam, attrParam, colIdx, fields.size());
+            return true;
+        }
+
+        boolean nullable = fields.get(colIdx).getType().isNullable();
+        log.debug("NotNull({}, {}): col index {} nullable={} -> notNull={}", tableParam, attrParam, colIdx, nullable, !nullable);
+        return !nullable;
+    }
+
+    private boolean evaluateUnique(String tableParam, String attrParam, Map<String, Object> bindings) {
+        // tableParam (e.g. t0) is bound to a LogicalTableScan
+        Object tableBinding = bindings.get(tableParam);
+        if (!(tableBinding instanceof LogicalTableScan)) {
+            log.debug("Unique({}, {}): table not bound to LogicalTableScan, skipping", tableParam, attrParam);
+            return true;
+        }
+        LogicalTableScan scan = (LogicalTableScan) tableBinding;
+
+        // attrParam (e.g. a0) index binding holds the 0-based column index in the row type
+        Object idxObj = bindings.get(attrParam + "_index");
+        if (!(idxObj instanceof Integer)) {
+            log.debug("Unique({}, {}): column index not bound, skipping", tableParam, attrParam);
+            return true;
+        }
+        int colIdx = (Integer) idxObj;
+        Table schemaTable = scan.getTable().unwrap(Table.class);
+        if (schemaTable == null) {
+            return true;
+        }
+        java.util.List<ImmutableBitSet> uniqueKeys = schemaTable.getStatistic().getKeys();
+        if (uniqueKeys == null || uniqueKeys.isEmpty()) {
+            return false;
+        }
+
+        for (org.apache.calcite.util.ImmutableBitSet key : uniqueKeys) {
+            if (key.equals(org.apache.calcite.util.ImmutableBitSet.of(colIdx))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 
     private boolean evaluatePredicateEq(String p1, String p2, Map<String, Object> bindings) {
         Object pred1 = bindings.get(p1);

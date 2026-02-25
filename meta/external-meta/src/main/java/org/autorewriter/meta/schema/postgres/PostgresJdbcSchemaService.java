@@ -1,12 +1,11 @@
 package org.autorewriter.meta.schema.postgres;
 
-import com.google.common.collect.ImmutableList;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.calcite.adapter.jdbc.JdbcSchema;
 import org.apache.calcite.rel.type.*;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.util.Util;
+import org.apache.calcite.util.ImmutableBitSet;
 import org.autorewriter.common.constant.DataTypeConstants;
 import org.autorewriter.common.entity.Column;
 import org.autorewriter.common.entity.ColumnDataType;
@@ -24,6 +23,7 @@ import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 import static org.autorewriter.common.constant.DataTypeConstants.COLUMN_ARRAY_DATA_TYPE_NAME;
@@ -63,7 +63,52 @@ public class PostgresJdbcSchemaService extends AbstractSchemaService {
         }
         List<String> qualifiedTableName = new ArrayList<>(parents);
         qualifiedTableName.add(tableName);
-        return new PostgresTable(qualifiedTableName, fieldList);
+
+        Map<String, Integer> colIndexMap = new java.util.HashMap<>();
+        for (int i = 0; i < fieldList.size(); i++) {
+            colIndexMap.put(fieldList.get(i).getName().toLowerCase(), i);
+        }
+        List<ImmutableBitSet> uniqueKeys = readUniqueKeys(schema, tableName, colIndexMap);
+
+        return new PostgresTable(qualifiedTableName, fieldList, uniqueKeys);
+    }
+
+    private List<ImmutableBitSet> readUniqueKeys(String schema, String tableName,
+                                                  Map<String, Integer> colIndexMap) {
+        List<ImmutableBitSet> result = new ArrayList<>();
+        try (Connection connection = dataSource.getConnection()) {
+            DatabaseMetaData meta = connection.getMetaData();
+
+            // Primary key
+            try (ResultSet pk = meta.getPrimaryKeys(null, schema, tableName)) {
+                List<Integer> pkCols = new ArrayList<>();
+                while (pk.next()) {
+                    Integer idx = colIndexMap.get(pk.getString("COLUMN_NAME").toLowerCase());
+                    if (idx != null) pkCols.add(idx);
+                }
+                if (!pkCols.isEmpty()) result.add(ImmutableBitSet.of(pkCols));
+            }
+
+            // Unique indexes
+            try (ResultSet idxRs = meta.getIndexInfo(null, schema, tableName, true, false)) {
+                java.util.Map<String, List<Integer>> idxCols = new java.util.LinkedHashMap<>();
+                while (idxRs.next()) {
+                    if (idxRs.getShort("TYPE") == DatabaseMetaData.tableIndexStatistic) continue;
+                    String idxName = idxRs.getString("INDEX_NAME");
+                    String col = idxRs.getString("COLUMN_NAME");
+                    if (idxName == null || col == null) continue;
+                    Integer idx = colIndexMap.get(col.toLowerCase());
+                    if (idx != null) idxCols.computeIfAbsent(idxName, k -> new ArrayList<>()).add(idx);
+                }
+                for (List<Integer> cols : idxCols.values()) {
+                    ImmutableBitSet key = ImmutableBitSet.of(cols);
+                    if (!result.contains(key)) result.add(key);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("readUniqueKeys: failed for {}.{}: {}", schema, tableName, e.getMessage());
+        }
+        return result;
     }
 
     RelProtoDataType getRelDataType(String catalogName, String schemaName, String tableName) throws SQLException {

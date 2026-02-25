@@ -11,7 +11,12 @@ import org.autorewriter.common.enums.TableEngine;
 import org.autorewriter.meta.schema.CalciteSchemaRegistry;
 
 import java.lang.reflect.Field;
+import org.apache.calcite.schema.Statistic;
+import org.apache.calcite.schema.Statistics;
+import org.apache.calcite.util.ImmutableBitSet;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -44,11 +49,19 @@ public class SchemaTestUtil {
     public static Table createTableForTest() {
         Table testTable = new AbstractTable() {
             @Override
+            public Statistic getStatistic() {
+                // user_id is at index 0, declared as a unique key
+                return Statistics.of(null,
+                        Collections.singletonList(ImmutableBitSet.of(0)),
+                        null, null);
+            }
+
+            @Override
             public RelDataType getRowType(RelDataTypeFactory typeFactory) {
                 List<String> columnNameList = new ArrayList<>();
                 List<RelDataType> columnTypeList = new ArrayList<>();
                 columnNameList.add("user_id");
-                columnTypeList.add(typeFactory.createSqlType(SqlTypeName.BIGINT));
+                columnTypeList.add( typeFactory.createSqlType(SqlTypeName.BIGINT));
                 columnNameList.add("name");
                 columnTypeList.add(typeFactory.createTypeWithNullability(typeFactory.createSqlType(SqlTypeName.VARCHAR), true));
                 columnNameList.add("pid");
