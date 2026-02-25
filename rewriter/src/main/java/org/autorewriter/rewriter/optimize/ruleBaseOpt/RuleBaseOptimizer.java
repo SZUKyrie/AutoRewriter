@@ -8,6 +8,9 @@ import org.apache.calcite.plan.hep.HepPlanner;
 import org.apache.calcite.plan.hep.HepProgram;
 import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
+import org.autorewriter.rewriter.optimize.BaseOptimizer;
+import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
+import org.autorewriter.rewriter.optimize.trace.RuleTraceListener;
 import org.autorewriter.rewriter.rule.AutoRewriteRule;
 
 import java.util.ArrayList;
@@ -18,7 +21,7 @@ import java.util.List;
  */
 @Setter
 @Getter
-public class RuleBaseOptimizer {
+public class RuleBaseOptimizer implements BaseOptimizer {
 
     private final List<RelOptRule> rules;
     private HepMatchOrder matchOrder;
@@ -45,44 +48,18 @@ public class RuleBaseOptimizer {
         this.plannerNeedsRebuild = true;
     }
 
-    /**
-     * Add a rewrite rule to the optimizer.
-     *
-     * @param rule the AutoRewriteRule to add
-     * @return this optimizer for chaining
-     */
     public RuleBaseOptimizer addRule(AutoRewriteRule rule) {
         this.rules.add(rule);
         this.plannerNeedsRebuild = true;
         return this;
     }
 
-    /**
-     * Add a general RelOptRule to the optimizer.
-     *
-     * @param rule the RelOptRule to add
-     * @return this optimizer for chaining
-     */
     public RuleBaseOptimizer addRule(RelOptRule rule) {
         this.rules.add(rule);
         this.plannerNeedsRebuild = true;
         return this;
     }
 
-    /**
-     * Set the match order for rule application.
-     *
-     * <p>Available match orders:</p>
-     * <ul>
-     *   <li>TOP_DOWN: Match from root to leaves (default)</li>
-     *   <li>BOTTOM_UP: Match from leaves to root</li>
-     *   <li>ARBITRARY: Match in arbitrary order</li>
-     *   <li>DEPTH_FIRST: Depth-first traversal</li>
-     * </ul>
-     *
-     * @param matchOrder the match order to use
-     * @return this optimizer for chaining
-     */
     public RuleBaseOptimizer setMatchOrder(HepMatchOrder matchOrder) {
         this.matchOrder = matchOrder;
         this.plannerNeedsRebuild = true;
@@ -129,49 +106,40 @@ public class RuleBaseOptimizer {
         this.plannerNeedsRebuild = false;
     }
 
-    /**
-     * Optimize a query plan by applying all registered rules.
-     *
-     * <p>Process:</p>
-     * <ol>
-     *   <li>Ensure HepPlanner is built (lazy initialization)</li>
-     *   <li>Set the root RelNode</li>
-     *   <li>Find the best plan (apply all rules)</li>
-     *   <li>Return the optimized RelNode</li>
-     * </ol>
-     *
-     * @param root the original query plan (RelNode)
-     * @return the optimized query plan
-     */
+    @Override
     public RelNode optimize(RelNode root) {
+        return optimize(root, null);
+    }
+
+    /**
+     * Optimize {@code root} and record every rule-fire into {@code trace}.
+     *
+     * @param root  the RelNode to optimize
+     * @param trace receives one {@link org.autorewriter.rewriter.optimize.trace.RuleApplicationStep}
+     *              per rule that actually fires; pass {@code null} to skip tracing
+     * @return the optimized RelNode
+     */
+    public RelNode optimize(RelNode root, OptimizationTrace trace) {
         if (rules.isEmpty()) {
             return root;
         }
 
-        // Ensure planner is built
         ensurePlannerBuilt();
 
-        // Set root and optimize
+        if (trace != null) {
+            planner.addListener(new RuleTraceListener(trace));
+        }
+
         planner.setRoot(root);
         return planner.findBestExp();
     }
 
-    /**
-     * Clear all registered rules.
-     *
-     * @return this optimizer for chaining
-     */
     public RuleBaseOptimizer clearRules() {
         this.rules.clear();
         this.plannerNeedsRebuild = true;
         return this;
     }
 
-    /**
-     * Get the number of registered rules.
-     *
-     * @return the number of rules
-     */
     public int getRuleCount() {
         return this.rules.size();
     }

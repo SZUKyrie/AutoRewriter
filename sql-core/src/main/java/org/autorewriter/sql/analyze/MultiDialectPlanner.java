@@ -217,7 +217,7 @@ public class MultiDialectPlanner implements Planner, RelOptTable.ViewExpander {
     @Override
     @EnsuresNonNull({"validator"})
     public SqlNode validate(SqlNode sqlNode) throws ValidationException {
-        //this.ensure(State.STATE_3_PARSED);
+        this.ensure(State.STATE_3_PARSED);
         this.validator = this.createSqlValidator(this.createCatalogReader());
 
         try {

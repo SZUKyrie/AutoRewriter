@@ -11,8 +11,16 @@ public class CalcitePlanTestBase {
     protected static final String TEST_DATABASE = "test";
     protected static final SqlPlanFixture SQL_PLAN_FIXTURE = new SqlPlanFixture();
 
-    @Test
-    public void createPGDeptTable() throws SQLException {
+    @BeforeClass
+    public static void init() {
+        try {
+            createPGDeptTable();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static void createPGDeptTable() throws SQLException {
         SQL_PLAN_FIXTURE.withComputeEngine(ComputeEngine.POSTGRESQL).withDb(TEST_DATABASE)
                 .withCreateTable(
                         "create table if not exists dept (\n" +

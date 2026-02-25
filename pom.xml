@@ -38,6 +38,36 @@
         <postgresql.version>42.7.1</postgresql.version>
     </properties>
 
+    <!--
+        Disable remote SNAPSHOT update checks for all repositories.
+        shardingsphere-sql-federation-core:5.5.4-SNAPSHOT is installed locally
+        via install-local-jars.sh; there is no need to contact gifshow nexus.
+        Setting updatePolicy=never makes Maven use the local cache and skip
+        the network round-trip that was causing long build times.
+    -->
+    <repositories>
+        <repository>
+            <id>central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>local-snapshots</id>
+            <url>file://${user.home}/.m2/repository</url>
+            <releases>
+                <enabled>true</enabled>
+                <updatePolicy>never</updatePolicy>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+                <!-- never: use local cache, never phone home -->
+                <updatePolicy>never</updatePolicy>
+            </snapshots>
+        </repository>
+    </repositories>
+
     <dependencyManagement>
         <dependencies>
             <!-- Calcite Core (Local JAR) -->
@@ -85,11 +115,30 @@
                 <version>${slf4j.version}</version>
             </dependency>
 
-            <!-- Logback (SLF4J implementation) -->
+            <!-- Logback — sole SLF4J 2.x provider; declared here so all modules inherit it -->
             <dependency>
                 <groupId>ch.qos.logback</groupId>
                 <artifactId>logback-classic</artifactId>
                 <version>1.4.14</version>
+            </dependency>
+
+            <!--
+                Exclude old SLF4J 1.7.x bindings pulled in transitively by shardingsphere.
+                Both conflict with slf4j-api 2.x and trigger "No SLF4J providers found" warnings.
+            -->
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-reload4j</artifactId>
+                <version>1.7.36</version>
+                <scope>provided</scope>
+                <optional>true</optional>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-slf4j-impl</artifactId>
+                <version>2.17.1</version>
+                <scope>provided</scope>
+                <optional>true</optional>
             </dependency>
 
             <!-- JUnit Jupiter (JUnit 5) -->

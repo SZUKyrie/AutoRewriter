@@ -16,7 +16,7 @@ public class SqlTestBase {
     /**
      * 默认的 SqlPlanFixture 实例，用于创建表
      */
-    protected static SqlPlanFixture sqlPlanFixtureWithHive4 = new SqlPlanFixture();
+    public static SqlPlanFixture sqlPlanFixture = new SqlPlanFixture();
 
     public static void createAllTable(String absPath) {
         Map<String, List<String>> dbToDdlMap = partitionSqlByDbName(absPath);
@@ -28,7 +28,7 @@ public class SqlTestBase {
         for (Map.Entry<String, List<String>> entry : dbToDdlMap.entrySet()) {
             String dbName = entry.getKey();
             List<String> createTableSqls = entry.getValue();
-            SqlPlanFixture sqlPlanFixture = sqlPlanFixtureWithHive4.withComputeEngine(ComputeEngine.POSTGRESQL).withDb(dbName);
+            SqlPlanFixture sqlPlanFixture = SqlTestBase.sqlPlanFixture.withDb(dbName).withComputeEngine(ComputeEngine.POSTGRESQL);
             sqlPlanFixture = sqlPlanFixture.withMultipleCreateTables(createTableSqls);
             log.info("create table with sql: {}", createTableSqls);
             try {

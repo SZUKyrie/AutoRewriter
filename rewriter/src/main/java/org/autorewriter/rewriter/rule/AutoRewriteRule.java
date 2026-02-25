@@ -24,17 +24,11 @@ import java.util.*;
 
 /**
  * Auto rewrite rule that matches source template RelNode and rewrites to target template RelNode.
- *
- * <p>The rule uses a component-based architecture:
- * <ul>
- *   <li>Matchers: Match template patterns against query RelNodes</li>
- *   <li>Fillers: Fill target templates with bound values</li>
- *   <li>ConstraintEvaluator: Evaluate match and rewrite constraints</li>
- * </ul>
  */
 @Slf4j
 public class AutoRewriteRule extends RelOptRule {
 
+    private final int ruleId;
     private final RelNode sourceTemplate;
     private final RelNode targetTemplate;
     private final List<ASTNode> matchConstraints;
@@ -56,7 +50,12 @@ public class AutoRewriteRule extends RelOptRule {
     private final ConstraintEvaluator constraintEvaluator;
 
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext) {
+        this(operand, ruleContext, -1);
+    }
+
+    public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext, int ruleId) {
         super(operand);
+        this.ruleId = ruleId;
         this.sourceTemplate = ruleContext.getSourceRelNode();
         this.targetTemplate = ruleContext.getTargetRelNode();
         this.matchConstraints = ruleContext.getMatchConstraints();
@@ -82,27 +81,31 @@ public class AutoRewriteRule extends RelOptRule {
 
     @Override
     public boolean matches(RelOptRuleCall call) {
+        log.debug("Trying to match rule[{}] on node: {}", ruleId, call.rel(0).getClass().getSimpleName());
         RelNode queryNode = call.rel(0);
         placeholderBindings.clear();
 
         if (!recursiveMatch(sourceTemplate, queryNode, placeholderBindings)) {
+            log.debug("Rule[{}] match failed: structure does not match", ruleId);
             return false;
         }
 
-        return constraintEvaluator.checkMatchConstraints(matchConstraints, placeholderBindings);
+        boolean res = constraintEvaluator.checkMatchConstraints(matchConstraints, placeholderBindings);
+        if(!res) {
+            log.debug("Rule[{}] match failed: constraints not satisfied", ruleId);
+        } else {
+            log.info("Rule[{}] match succeeded", ruleId);
+        }
+        return res;
     }
 
     @Override
     public void onMatch(RelOptRuleCall call) {
         log.debug("Rule matched, bindings: {}", placeholderBindings.keySet());
-
         Map<String, Object> rewriteBindings = constraintEvaluator.applyRewriteConstraints(rewriteConstraints, placeholderBindings);
         log.debug("Rewrite bindings: {}", rewriteBindings.keySet());
 
         RelNode rewrittenNode = fillTargetTemplate(targetTemplate, rewriteBindings);
-        log.info("Query rewritten: {} -> {}",
-            call.rel(0).getClass().getSimpleName(),
-            rewrittenNode.getClass().getSimpleName());
 
         RelNode originalNode = call.rel(0);
         RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
@@ -186,16 +189,16 @@ public class AutoRewriteRule extends RelOptRule {
     private boolean recursiveMatch(RelNode template, RelNode query, Map<String, Object> bindings) {
         query = unwrapHepVertex(query);
 
-        log.info("recursiveMatch: template={}, query={}",
-            template.getClass().getSimpleName(), query.getClass().getSimpleName());
+//        log.info("recursiveMatch: template={}, query={}",
+//            template.getClass().getSimpleName(), query.getClass().getSimpleName());
 
         if (template instanceof LogicalTableScan) {
             return tableScanMatcher.matchInputPlaceholder((LogicalTableScan) template, query, bindings);
         }
 
         if (!template.getClass().equals(query.getClass())) {
-            log.info("Class mismatch: {} != {}",
-                template.getClass().getSimpleName(), query.getClass().getSimpleName());
+//            log.info("Class mismatch: {} != {}",
+//                template.getClass().getSimpleName(), query.getClass().getSimpleName());
             return false;
         }
 

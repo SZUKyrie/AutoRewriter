@@ -8,7 +8,7 @@ import static org.junit.Assert.assertEquals;
 
 public class SqlAnalyzerTest extends PostgresqlSchemaTestBase {
     @Test
-    public void testSqlAnalysis() throws Exception {
+    public void testSqlAnalysis(){
         String sql = "SELECT max(user_id) FROM test_table WHERE user_id = 1";
         AnalysisContext sqlNode = SqlAnalyzer.analyze(sql, ComputeEngine.POSTGRESQL);
         RelNode relNode = sqlNode.getRelNode();

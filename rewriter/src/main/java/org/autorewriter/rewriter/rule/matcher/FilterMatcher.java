@@ -21,23 +21,29 @@ public class FilterMatcher implements RelNodeMatcher<LogicalFilter> {
 
     @Override
     public boolean match(LogicalFilter template, LogicalFilter query, Map<String, Object> bindings) {
-        log.info("matchFilter: template condition={}, query condition={}",
+        log.info("Try match Filter: template condition={}, query condition={}",
             template.getCondition(), query.getCondition());
 
         if (!recursiveMatchFunc.apply(template.getInput(), query.getInput())) {
-            log.info("matchFilter: input match failed");
+            log.info("match Filter Failed");
             return false;
         }
 
         boolean result = rexNodeMatcher.match(template.getCondition(), query.getCondition(), bindings);
-
         if (result && template.getCondition() instanceof RexCall) {
             extractAndBindAttributes(template.getCondition(), query.getCondition(), bindings);
+        }
+
+        if(result) {
+            log.info("match Filter success");
         }
 
         return result;
     }
 
+    /**
+     * Extract and bind attributes from query condition to template condition.
+     * */
     private void extractAndBindAttributes(RexNode template, RexNode query, Map<String, Object> bindings) {
         if (template instanceof RexInputRef && query instanceof RexInputRef) {
             RexInputRef templateRef = (RexInputRef) template;

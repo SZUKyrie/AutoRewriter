@@ -1,6 +1,7 @@
 package org.autorewriter.sql.analyze;
 
 import com.google.common.base.Preconditions;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.jdbc.CalciteSchema;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
@@ -21,6 +22,7 @@ import org.autorewriter.sql.exception.SqlParseException;
 
 import static org.autorewriter.sql.analyze.AnalysisConfigs.*;
 
+@Slf4j
 public class SqlAnalyzer {
     public static AnalysisContext analyze(String query, ComputeEngine computeEngine)
             throws SqlParseException, SqlAnalyzeException {
@@ -38,6 +40,7 @@ public class SqlAnalyzer {
             RelNode relNode = planner.rel(validatedNode).project();
             return new AnalysisContext(planner, relNode);
         } catch (Exception e) {
+            log.error("failed to analyze sql, exception: {}", ExceptionUtils.getStackTrace(e));
             throw new SqlAnalyzeException(ExceptionUtils.getStackTrace(e));
         }
     }
@@ -47,6 +50,7 @@ public class SqlAnalyzer {
             MultiDialectSqlParser parser = MultiDialectSqlParserFactory.createParser(computeEngine);
             return parser.parse(sql);
         } catch (Exception e) {
+            log.error("failed to parse sql, exception: {}", ExceptionUtils.getStackTrace(e));
             throw new SqlParseException(e);
         }
     }

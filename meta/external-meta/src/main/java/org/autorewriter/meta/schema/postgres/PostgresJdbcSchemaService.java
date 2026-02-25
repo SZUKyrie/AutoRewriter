@@ -3,113 +3,155 @@ package org.autorewriter.meta.schema.postgres;
 import com.google.common.collect.ImmutableList;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.adapter.jdbc.JdbcSchema;
-import org.apache.calcite.rel.type.RelDataTypeFactory;
-import org.apache.calcite.rel.type.RelDataTypeImpl;
+import org.apache.calcite.rel.type.*;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.calcite.util.Util;
+import org.autorewriter.common.constant.DataTypeConstants;
 import org.autorewriter.common.entity.Column;
+import org.autorewriter.common.entity.ColumnDataType;
+import org.autorewriter.common.entity.PrecisionScale;
+import org.autorewriter.common.utils.DataTypeUtils;
 import org.autorewriter.meta.schema.AbstractSchemaService;
 import org.autorewriter.meta.schema.postgres.table.PostgresTable;
 
+import javax.annotation.Nullable;
 import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Types;
+import java.util.ArrayList;
 import java.util.List;
 
-/**
- * PostgreSQL Schema 服务（基于 JDBC DataSource）
- * 参考 adaptiveengine 的 H2SchemaService 设计
- *
- * 支持两种模式：
- * 1. 通过连接配置名称获取元数据（使用 PostgresMetadataReader）
- * 2. 通过 DataSource 直接访问（用于测试）
- *
- * @author AutoRewriter
- * Created on 2026-02-13
- */
+import static java.util.Objects.requireNonNull;
+import static org.autorewriter.common.constant.DataTypeConstants.COLUMN_ARRAY_DATA_TYPE_NAME;
+import static org.autorewriter.common.constant.JdbcConstants.*;
+import static org.autorewriter.common.constant.NotationConstants.OPEN_PARENTHESIS;
+
+
 @Slf4j
 public class PostgresJdbcSchemaService extends AbstractSchemaService {
 
     private final DataSource dataSource;
-    private final RelDataTypeFactory typeFactory;
-    private final String configName;
-    private final PostgresMetadataReader metadataReader;
+    private RelDataTypeFactory relDataTypeFactory;
 
-    /**
-     * 构造函数（使用 DataSource）
-     *
-     * @param dataSource JDBC DataSource
-     * @param typeFactory 类型工厂
-     */
-    public PostgresJdbcSchemaService(DataSource dataSource, RelDataTypeFactory typeFactory) {
+    public PostgresJdbcSchemaService(DataSource dataSource,
+                                     RelDataTypeFactory relDataTypeFactory) {
         this.dataSource = dataSource;
-        this.typeFactory = typeFactory;
-        this.configName = null;
-        this.metadataReader = null;
-        registerTypes();
-    }
-
-    /**
-     * 构造函数（使用配置名称）
-     *
-     * @param configName 配置名称
-     * @param typeFactory 类型工厂
-     */
-    public PostgresJdbcSchemaService(String configName, RelDataTypeFactory typeFactory) {
-        this.configName = configName;
-        this.typeFactory = typeFactory;
-        this.dataSource = null;
-        this.metadataReader = new PostgresMetadataReader(configName);
-        registerTypes();
+        this.relDataTypeFactory = relDataTypeFactory;
     }
 
     @Override
     public Table getTable(List<String> parents, String tableName) throws Exception {
-        log.debug("Getting table: parents={}, tableName={}", parents, tableName);
+        // PostgreSQL stores unquoted identifiers in lowercase
+        String catalog = parents.isEmpty() ? null : parents.get(0).toLowerCase();
+        String schema = parents.size() > 1 ? parents.get(1).toLowerCase() : "tpcds";
+        tableName = tableName.toLowerCase();
 
-        if (metadataReader != null) {
-            // 使用 MetadataReader 模式
-            List<Column> columns = metadataReader.readTableColumns(parents, tableName);
-            if (columns.isEmpty()) {
-                log.warn("Table not found or has no columns: {}", tableName);
-                return null;
-            }
+        RelProtoDataType relProtoDataType = getRelDataType(catalog, schema, tableName);
+        RelDataType relDataType = relProtoDataType.apply(this.relDataTypeFactory);
+        List<Column> fieldList = new ArrayList<>();
+        List<RelDataTypeField> relFieldList = relDataType.getFieldList();
+        for (RelDataTypeField relDataTypeField : relFieldList) {
+            Column column = new Column();
+            column.setName(relDataTypeField.getName().toLowerCase());
+            ColumnDataType columnDataType = DataTypeUtils.createColumnDataTypeFromRelDataType(relDataTypeField.getType());
+            column.setType(columnDataType);
+            fieldList.add(column);
+        }
+        List<String> qualifiedTableName = new ArrayList<>(parents);
+        qualifiedTableName.add(tableName);
+        return new PostgresTable(qualifiedTableName, fieldList);
+    }
 
-            List<String> qualifiedName = buildQualifiedName(parents, tableName);
-            return new PostgresTable(qualifiedName, columns);
-        } else {
-            // 使用 DataSource 模式（通过 JdbcSchema）
-            // 这里可以通过 JDBC 直接查询表结构
-            log.debug("Using DataSource mode to get table: {}", tableName);
-            // TODO: 可以在这里实现通过 DataSource 直接查询表结构的逻辑
-            return null;
+    RelProtoDataType getRelDataType(String catalogName, String schemaName, String tableName) throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            DatabaseMetaData metaData = connection.getMetaData();
+            return getRelDataType(metaData, catalogName, schemaName, tableName);
         }
     }
 
-    private List<String> buildQualifiedName(List<String> parents, String tableName) {
-        ImmutableList.Builder<String> builder = ImmutableList.builder();
-        builder.addAll(parents);
-        builder.add(tableName);
-        return builder.build();
+    private RelProtoDataType getRelDataType(DatabaseMetaData metaData, String catalogName, String schemaName, String tableName) throws SQLException {
+        log.debug("getRelDataType: catalog={}, schema={}, table={}", catalogName, schemaName, tableName);
+        final ResultSet resultSet = metaData.getColumns(null, schemaName, tableName, null);
+        final RelDataTypeFactory.Builder fieldInfo = this.relDataTypeFactory.builder();
+        while (resultSet.next()) {
+            final String columnName = requireNonNull(resultSet.getString(COLUMN_NAME), "columnName");
+            final int dataType = resultSet.getInt(DATA_TYPE);
+            final String typeString = resultSet.getString(TYPE_NAME);
+            final int precision;
+            final int scale;
+            switch (dataType) {
+                case Types.TIMESTAMP:
+                case Types.TIME:
+                    precision = resultSet.getInt(DECIMAL_DIGITS);
+                    scale = 0;
+                    break;
+                default:
+                    precision = resultSet.getInt(COLUMN_SIZE);
+                    scale = resultSet.getInt(DECIMAL_DIGITS);
+                    break;
+            }
+            RelDataType sqlType = sqlType(this.relDataTypeFactory, dataType, precision, scale, typeString);
+            boolean nullable = resultSet.getInt(NULLABLE) != DatabaseMetaData.columnNoNulls;
+            fieldInfo.add(columnName, sqlType).nullable(nullable);
+        }
+        resultSet.close();
+        return RelDataTypeImpl.proto(fieldInfo.build());
     }
 
-    private void registerTypes() {
-        registerType("string", RelDataTypeImpl.proto(SqlTypeName.VARCHAR, Integer.MAX_VALUE, true));
-        registerType("timestamp", RelDataTypeImpl.proto(SqlTypeName.TIMESTAMP, true));
-        registerType("double", RelDataTypeImpl.proto(SqlTypeName.DOUBLE, -1, true));
-        registerType("bigint", RelDataTypeImpl.proto(SqlTypeName.BIGINT, -1, true));
-        registerType("int", RelDataTypeImpl.proto(SqlTypeName.INTEGER, -1, true));
-        registerType("float", RelDataTypeImpl.proto(SqlTypeName.FLOAT, -1, true));
-        registerType("decimal", RelDataTypeImpl.proto(SqlTypeName.DECIMAL, 10, 2, true));
-        registerType("boolean", RelDataTypeImpl.proto(SqlTypeName.BOOLEAN, true));
-        registerType("date", RelDataTypeImpl.proto(SqlTypeName.DATE, true));
-        registerType("time", RelDataTypeImpl.proto(SqlTypeName.TIME, true));
+    private static RelDataType sqlType(RelDataTypeFactory typeFactory, int dataType, int precision, int scale, @Nullable String typeString) {
+        // Fall back to ANY if type is unknown
+        final SqlTypeName sqlTypeName = Util.first(SqlTypeName.getNameForJdbcType(dataType), SqlTypeName.ANY);
+        switch (sqlTypeName) {
+            case ARRAY:
+                RelDataType component = null;
+                String arrayTypeStringSuffix = " " + COLUMN_ARRAY_DATA_TYPE_NAME;
+                if (typeString != null && typeString.endsWith(arrayTypeStringSuffix)) {
+                    // E.g. hsqldb gives "INTEGER ARRAY", so we deduce the component type
+                    // "INTEGER".
+                    final String remaining = typeString.substring(0, typeString.length() - arrayTypeStringSuffix.length());
+                    component = parseTypeString(typeFactory, remaining);
+                }
+                if (component == null) {
+                    component = typeFactory.createTypeWithNullability(typeFactory.createSqlType(SqlTypeName.ANY), true);
+                }
+                return typeFactory.createArrayType(component, DataTypeConstants.MAX_CARDINALITY_OF_ARRAY_TYPE);
+            default:
+                break;
+        }
+        if (precision >= 0 && scale >= 0 && sqlTypeName.allowsPrecScale(true, true)) {
+            return typeFactory.createSqlType(sqlTypeName, precision, scale);
+        } else if (precision >= 0 && sqlTypeName.allowsPrecNoScale()) {
+            return typeFactory.createSqlType(sqlTypeName, precision);
+        } else {
+            assert sqlTypeName.allowsNoPrecNoScale();
+            return typeFactory.createSqlType(sqlTypeName);
+        }
     }
 
-    public DataSource getDataSource() {
-        return dataSource;
-    }
-
-    public RelDataTypeFactory getTypeFactory() {
-        return typeFactory;
+    /**
+     * Given "INTEGER", returns BasicSqlType(INTEGER).
+     * Given "VARCHAR(10)", returns BasicSqlType(VARCHAR, 10).
+     * Given "NUMERIC(10, 2)", returns BasicSqlType(NUMERIC, 10, 2).
+     */
+    private static RelDataType parseTypeString(RelDataTypeFactory typeFactory, String typeString) {
+        PrecisionScale precisionScale = DataTypeUtils.parsePrecisionAndScale(typeString);
+        int precision = precisionScale.getPrecision();
+        int scale = precisionScale.getScale();
+        int open = typeString.indexOf(OPEN_PARENTHESIS);
+        if (open >= 0) {
+            typeString = typeString.substring(0, open);
+        }
+        try {
+            final SqlTypeName typeName = SqlTypeName.valueOf(typeString);
+            return typeName.allowsPrecScale(true, true) ? typeFactory.createSqlType(typeName, precision, scale) : typeName.allowsPrecScale(true,
+                    false) ? typeFactory.createSqlType(typeName, precision) : typeFactory.createSqlType(typeName);
+        } catch (IllegalArgumentException e) {
+            return typeFactory.createTypeWithNullability(typeFactory.createSqlType(SqlTypeName.ANY), true);
+        }
     }
 }
 
