@@ -3,7 +3,10 @@ package org.autorewriter.rewriter.pipleline.manual;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.rel.RelNode;
-import org.autorewriter.common.enums.ComputeEngine;
+import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
+import org.apache.calcite.sql.SqlDialect;
+import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.dialect.AnsiSqlDialect;
 import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
 import org.autorewriter.rewriter.historical.HistoricalSqlRecord;
 
@@ -61,12 +64,13 @@ public class ManualProducePipeline extends ProducePipeline {
 
             optimizeResult.setTrace(trace);
             if (optimizedRelNode.deepEquals(relNode)) {
-                log.info("query {} cannot be optimized by any rule.", historicalSqlRecord.getQueryId());
+                log.info("query {} cannot be optimized by any rule, optimize time: {} ms", historicalSqlRecord.getQueryId(), optimizationTimeInMs);
                 optimizeResult.setRewritten(false);
                 optimizeResult.setOptimizationTimeInMs(optimizationTimeInMs);
                 optimizeResult.setOriginalRelNode(relNode);
             } else {
                 log.info("query {} is optimized. {}", historicalSqlRecord.getQueryId(), trace.summary());
+                log.info("optimized query:\n {}", relNodeToSql(optimizedRelNode));
                 optimizeResult.setRewritten(true);
                 optimizeResult.setOptimizationTimeInMs(optimizationTimeInMs);
                 optimizeResult.setOriginalRelNode(relNode);
@@ -77,5 +81,19 @@ public class ManualProducePipeline extends ProducePipeline {
         }
         produceResult.setSuccess(true);
         return produceResult;
+    }
+
+    private String relNodeToSql(RelNode relNode) {
+        try {
+            SqlDialect dialect = AnsiSqlDialect.DEFAULT;
+            RelToSqlConverter converter =
+                    new RelToSqlConverter(dialect);
+            RelToSqlConverter.Result result =
+                    converter.visitRoot(relNode);
+            SqlNode sqlNode = result.asStatement();
+            return sqlNode.toSqlString(dialect).getSql();
+        } catch (Exception e) {
+            return "Failed to convert to SQL: " + e.getMessage();
+        }
     }
 }

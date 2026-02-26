@@ -14,13 +14,6 @@ import static org.autorewriter.common.constant.DataTypeConstants.UNKNOWN_DATA_TY
 
 /**
  * A registry centre that all converters are registered.
- *
- * PostgreSQL 只需要基本类型转换器，因为：
- * 1. PostgresMetadataReader 通过 JDBC 只读取基本类型
- * 2. 不需要 Hive 的复杂类型（Map, Array, Struct）
- *
- * @author AutoRewriter
- * Created on 2026-02-13
  */
 public class ColumnDataTypeConverterRegistry {
     private static final Map<TableEngine, Map<Class<? extends ColumnDataType>, ColumnDataTypeConverter>> REGISTRY_BY_CLASS = new HashMap<>();

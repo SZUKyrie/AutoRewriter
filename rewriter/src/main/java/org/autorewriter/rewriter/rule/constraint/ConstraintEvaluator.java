@@ -1,20 +1,31 @@
 package org.autorewriter.rewriter.rule.constraint;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.LogicalTableScan;
+import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
+import org.apache.calcite.rel.metadata.JaninoRelMetadataProvider;
+import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
-import org.apache.calcite.schema.Table;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.shardingsphere.sql.parser.api.ASTNode;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 public class ConstraintEvaluator {
+
+    private static final JaninoRelMetadataProvider METADATA_PROVIDER =
+            JaninoRelMetadataProvider.of(DefaultRelMetadataProvider.INSTANCE);
+
+    private RelMetadataQuery createMetadataQuery() {
+        return new RelMetadataQuery(METADATA_PROVIDER);
+    }
 
     public boolean checkMatchConstraints(List<ASTNode> constraints, Map<String, Object> bindings) {
         if (constraints == null || constraints.isEmpty()) {
@@ -71,12 +82,11 @@ public class ConstraintEvaluator {
     }
 
     private boolean evaluateNotNull(String tableParam, String attrParam, Map<String, Object> bindings) {
-        Object tableBinding = bindings.get(tableParam);
-        if (!(tableBinding instanceof LogicalTableScan)) {
-            log.debug("NotNull({}, {}): table not bound to LogicalTableScan, skipping", tableParam, attrParam);
+        RelNode rel = resolveRelNode(bindings.get(tableParam));
+        if (rel == null) {
+            log.debug("NotNull({}, {}): not bound to a RelNode, skipping", tableParam, attrParam);
             return true;
         }
-        LogicalTableScan scan = (LogicalTableScan) tableBinding;
 
         Object idxObj = bindings.get(attrParam + "_index");
         if (!(idxObj instanceof Integer)) {
@@ -85,53 +95,60 @@ public class ConstraintEvaluator {
         }
         int colIdx = (Integer) idxObj;
 
-        // Column nullability is carried directly in the RelOptTable row type
-        org.apache.calcite.rel.type.RelDataType rowType = scan.getTable().getRowType();
-        List<org.apache.calcite.rel.type.RelDataTypeField> fields = rowType.getFieldList();
+        List<org.apache.calcite.rel.type.RelDataTypeField> fields = rel.getRowType().getFieldList();
         if (colIdx >= fields.size()) {
-            log.debug("NotNull({}, {}): column index {} out of range ({})", tableParam, attrParam, colIdx, fields.size());
+            log.debug("NotNull({}, {}): col index {} out of range ({})", tableParam, attrParam, colIdx, fields.size());
             return true;
         }
 
         boolean nullable = fields.get(colIdx).getType().isNullable();
-        log.debug("NotNull({}, {}): col index {} nullable={} -> notNull={}", tableParam, attrParam, colIdx, nullable, !nullable);
+        log.debug("NotNull({}, {}): col {} nullable={} -> notNull={}", tableParam, attrParam, colIdx, nullable, !nullable);
         return !nullable;
     }
 
     private boolean evaluateUnique(String tableParam, String attrParam, Map<String, Object> bindings) {
-        // tableParam (e.g. t0) is bound to a LogicalTableScan
-        Object tableBinding = bindings.get(tableParam);
-        if (!(tableBinding instanceof LogicalTableScan)) {
-            log.debug("Unique({}, {}): table not bound to LogicalTableScan, skipping", tableParam, attrParam);
+        RelNode rel = resolveRelNode(bindings.get(tableParam));
+        if (rel == null) {
+            log.debug("Unique({}, {}): not bound to a RelNode, skipping", tableParam, attrParam);
             return true;
         }
-        LogicalTableScan scan = (LogicalTableScan) tableBinding;
 
-        // attrParam (e.g. a0) index binding holds the 0-based column index in the row type
         Object idxObj = bindings.get(attrParam + "_index");
         if (!(idxObj instanceof Integer)) {
             log.debug("Unique({}, {}): column index not bound, skipping", tableParam, attrParam);
             return true;
         }
         int colIdx = (Integer) idxObj;
-        Table schemaTable = scan.getTable().unwrap(Table.class);
-        if (schemaTable == null) {
-            return true;
-        }
-        java.util.List<ImmutableBitSet> uniqueKeys = schemaTable.getStatistic().getKeys();
+
+        RelMetadataQuery mq = createMetadataQuery();
+        Set<ImmutableBitSet> uniqueKeys = mq.getUniqueKeys(rel, false);
+
         if (uniqueKeys == null || uniqueKeys.isEmpty()) {
+            log.debug("Unique({}, {}): no unique keys on {}", tableParam, attrParam, rel.getRelTypeName());
             return false;
         }
 
-        for (org.apache.calcite.util.ImmutableBitSet key : uniqueKeys) {
-            if (key.equals(org.apache.calcite.util.ImmutableBitSet.of(colIdx))) {
+        ImmutableBitSet colBit = ImmutableBitSet.of(colIdx);
+        for (ImmutableBitSet key : uniqueKeys) {
+            if (key.equals(colBit)) {
+                log.debug("Unique({}, {}): col {} matched unique key -> true", tableParam, attrParam, colIdx);
                 return true;
             }
         }
 
+        log.debug("Unique({}, {}): col {} not a sole unique key, keys={}", tableParam, attrParam, colIdx, uniqueKeys);
         return false;
     }
 
+    private RelNode resolveRelNode(Object binding) {
+        if (binding instanceof HepRelVertex) {
+            return ((HepRelVertex) binding).getCurrentRel();
+        }
+        if (binding instanceof RelNode) {
+            return (RelNode) binding;
+        }
+        return null;
+    }
 
     private boolean evaluatePredicateEq(String p1, String p2, Map<String, Object> bindings) {
         Object pred1 = bindings.get(p1);

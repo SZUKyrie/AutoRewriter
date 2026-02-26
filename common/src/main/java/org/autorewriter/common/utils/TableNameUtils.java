@@ -8,9 +8,6 @@ import java.util.List;
 import static org.autorewriter.common.constant.NotationConstants.DOT;
 /**
  * Utils for table name
- *
- * @author wangyanjing <wangyanjing@kuaishou.com>
- * Created on 2024-07-30
  */
 public class TableNameUtils {
 

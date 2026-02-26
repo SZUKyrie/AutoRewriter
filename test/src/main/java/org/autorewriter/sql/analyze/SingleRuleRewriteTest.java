@@ -2,6 +2,10 @@ package org.autorewriter.sql.analyze;
 
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
+import org.apache.calcite.sql.SqlDialect;
+import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.dialect.AnsiSqlDialect;
 import org.autorewriter.common.enums.ComputeEngine;
 import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
 import org.autorewriter.rewriter.analyze.RuleAnalyzer;
@@ -171,12 +175,12 @@ public class SingleRuleRewriteTest extends PostgresqlSchemaTestBase{
      */
     private String relNodeToSql(RelNode relNode) {
         try {
-            org.apache.calcite.sql.SqlDialect dialect = org.apache.calcite.sql.dialect.AnsiSqlDialect.DEFAULT;
-            org.apache.calcite.rel.rel2sql.RelToSqlConverter converter =
-                    new org.apache.calcite.rel.rel2sql.RelToSqlConverter(dialect);
-            org.apache.calcite.rel.rel2sql.RelToSqlConverter.Result result =
+            SqlDialect dialect = AnsiSqlDialect.DEFAULT;
+            RelToSqlConverter converter =
+                    new RelToSqlConverter(dialect);
+            RelToSqlConverter.Result result =
                     converter.visitRoot(relNode);
-            org.apache.calcite.sql.SqlNode sqlNode = result.asStatement();
+            SqlNode sqlNode = result.asStatement();
             return sqlNode.toSqlString(dialect).getSql();
         } catch (Exception e) {
             return "Failed to convert to SQL: " + e.getMessage();

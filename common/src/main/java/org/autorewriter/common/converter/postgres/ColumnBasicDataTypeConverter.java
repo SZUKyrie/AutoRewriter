@@ -20,10 +20,6 @@ import static org.autorewriter.common.constant.NotationConstants.OPEN_PARENTHESI
 
 /**
  * Converter that converts {@link ColumnBasicDataType} to calcite's {@link RelDataType}
- * 完全参考 adaptiveengine 的 Hive ColumnBasicDataTypeConverter 实现
- *
- * @author AutoRewriter
- * Created on 2026-02-13
  */
 public class ColumnBasicDataTypeConverter extends AbstractColumnDataTypeConverter {
 
