@@ -47,12 +47,12 @@ public class ConstraintEvaluator {
 
                 ConstraintHandler handler = handlers.get(constraintType);
                 if (handler == null) {
-                    log.debug("Unknown constraint type: {}", constraintType);
+                    log.error("Unknown constraint type: {}", constraintType);
                     continue;
                 }
 
                 if (!handler.evaluate(params, bindings)) {
-                    log.debug("Constraint {} failed with params: {}", constraintType, Arrays.toString(params));
+                    log.info("Constraint {} failed with params: {}", constraintType, Arrays.toString(params));
                     return false;
                 }
             }

@@ -30,7 +30,6 @@ public class SqlTestBase {
             List<String> createTableSqls = entry.getValue();
             SqlPlanFixture sqlPlanFixture = SqlTestBase.sqlPlanFixture.withDb(dbName).withComputeEngine(ComputeEngine.POSTGRESQL);
             sqlPlanFixture = sqlPlanFixture.withMultipleCreateTables(createTableSqls);
-            log.info("create table with sql: {}", createTableSqls);
             try {
                 sqlPlanFixture.createNewTable();
             } catch (Exception e) {
@@ -47,11 +46,13 @@ public class SqlTestBase {
     private static Map<String, List<String>> makePartitionMap(List<String> allQuery) {
         Map<String, List<String>> dbToDdlMap = new HashMap<>();
         for (String sql : allQuery) {
-            String dbName = extractDbNameFromSql(sql); // 提取数据库名
+            String[] result = extractDbNameAndStripPrefix(sql);
+            String dbName = result[0];
+            String strippedSql = result[1];
             if (!dbToDdlMap.containsKey(dbName)) {
                 dbToDdlMap.put(dbName, new ArrayList<>());
             }
-            dbToDdlMap.get(dbName).add(sql);
+            dbToDdlMap.get(dbName).add(strippedSql);
         }
         return dbToDdlMap;
     }
@@ -76,7 +77,6 @@ public class SqlTestBase {
         try (BufferedReader br = new BufferedReader(new FileReader(absPath))) {
             String currentLine;
             while ((currentLine = br.readLine()) != null) {
-                // pass comment in sql
                 if(!currentLine.trim().startsWith("--"))
                     contentBuilder.append(currentLine).append("\n");
             }
@@ -86,37 +86,35 @@ public class SqlTestBase {
         return contentBuilder.toString();
     }
 
-    private static String extractDbNameFromSql(String createTableSql) {
-        if (createTableSql == null) {
-            return null;
+    /**
+     * 从 CREATE TABLE / DROP TABLE / CREATE INDEX 等语句中提取 schema/db 前缀，
+     * 同时返回去掉该前缀后的 SQL（避免 PostgreSQL 把它识别为 schema 限定符）。
+     *
+     * @return String[2]：[0] = dbName，[1] = 去掉前缀的 SQL
+     */
+    private static String[] extractDbNameAndStripPrefix(String sql) {
+        if (sql == null) {
+            return new String[]{null, null};
         }
 
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile(
-                "(?:`([^`]+)`|\"([^\"]+)\"|([^\\s\\.\"`]+))\\s*\\.",
-                java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+        // 匹配 `schema`. 或 "schema". 或 schema. 形式，全局替换所有出现位置
+        java.util.regex.Pattern prefixPattern = java.util.regex.Pattern.compile(
+                "(?:`([^`]+)`|\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_]*))\\.",
+                java.util.regex.Pattern.CASE_INSENSITIVE
         );
-        java.util.regex.Matcher m = p.matcher(createTableSql);
+        java.util.regex.Matcher m = prefixPattern.matcher(sql);
+
+        String dbName = null;
+        // 取第一个匹配到的前缀作为 dbName
         if (m.find()) {
-            if (m.group(1) != null) return m.group(1);
-            if (m.group(2) != null) return m.group(2);
-            return m.group(3);
+            if (m.group(1) != null) dbName = m.group(1);
+            else if (m.group(2) != null) dbName = m.group(2);
+            else dbName = m.group(3);
         }
 
-        // 回退：取第一个点前的部分，去除两端的标点/空白/引号
-        int idx = createTableSql.indexOf('.');
-        if (idx > 0) {
-            String left = createTableSql.substring(0, idx).trim();
-            // 去掉开头/结尾的标点和空白
-            left = left.replaceAll("^[\\p{Punct}\\s]+|[\\p{Punct}\\s]+$", "");
-            // 额外去掉包裹的反引号或双引号
-            if (left.length() >= 2 && left.startsWith("`") && left.endsWith("`")) {
-                left = left.substring(1, left.length() - 1);
-            } else if (left.length() >= 2 && left.startsWith("\"") && left.endsWith("\"")) {
-                left = left.substring(1, left.length() - 1);
-            }
-            if (!left.isEmpty()) return left;
-        }
+        // 去掉所有 schema. 前缀（包含反引号/双引号形式）
+        String strippedSql = prefixPattern.matcher(sql).replaceAll("");
 
-        return null;
+        return new String[]{dbName, strippedSql};
     }
 }

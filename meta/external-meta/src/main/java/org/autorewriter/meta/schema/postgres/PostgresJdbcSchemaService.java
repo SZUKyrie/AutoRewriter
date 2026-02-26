@@ -47,7 +47,7 @@ public class PostgresJdbcSchemaService extends AbstractSchemaService {
     public Table getTable(List<String> parents, String tableName) throws Exception {
         // PostgreSQL stores unquoted identifiers in lowercase
         String catalog = parents.isEmpty() ? null : parents.get(0).toLowerCase();
-        String schema = parents.size() > 1 ? parents.get(1).toLowerCase() : "tpcds";
+        String schema = parents.size() > 1 ? parents.get(1).toLowerCase() : "public";
         tableName = tableName.toLowerCase();
 
         RelProtoDataType relProtoDataType = getRelDataType(catalog, schema, tableName);

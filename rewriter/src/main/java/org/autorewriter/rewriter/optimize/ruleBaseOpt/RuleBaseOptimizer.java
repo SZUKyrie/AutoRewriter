@@ -68,9 +68,6 @@ public class RuleBaseOptimizer implements BaseOptimizer {
 
     /**
      * Set the maximum number of iterations for rule application.
-     *
-     * @param maxIterations maximum iterations (must be > 0)
-     * @return this optimizer for chaining
      */
     public RuleBaseOptimizer setMaxIterations(int maxIterations) {
         if (maxIterations <= 0) {
@@ -113,11 +110,6 @@ public class RuleBaseOptimizer implements BaseOptimizer {
 
     /**
      * Optimize {@code root} and record every rule-fire into {@code trace}.
-     *
-     * @param root  the RelNode to optimize
-     * @param trace receives one {@link org.autorewriter.rewriter.optimize.trace.RuleApplicationStep}
-     *              per rule that actually fires; pass {@code null} to skip tracing
-     * @return the optimized RelNode
      */
     public RelNode optimize(RelNode root, OptimizationTrace trace) {
         if (rules.isEmpty()) {

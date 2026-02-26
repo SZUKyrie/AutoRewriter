@@ -157,11 +157,12 @@ public class SqlPlanFixture {
             @SuppressWarnings("unchecked")
             Map<TableEngine, CalciteSchema> engineSchemaMap = (Map<TableEngine, CalciteSchema>) field;
 
-            log.debug("Creating new PostgreSQL schema: {}", getUrl());
+            log.info("Creating new PostgreSQL schema: {}", getUrl());
             String url = getUrl();
             DataSource dataSource = JdbcSchema.dataSource(url, driverClassName, "postgres", "postgres");
             PostgresJdbcSchemaService postgresSchemaService = new PostgresJdbcSchemaService(dataSource, typeFactory);
-            ProxySchema proxySchema = new ProxySchema(List.of(), postgresSchemaService);
+            // parents = [catalog=db, schema=public]
+            ProxySchema proxySchema = new ProxySchema(List.of(this.db, "public"), postgresSchemaService);
             KwaiCalciteSchema kwaiCalciteSchema = new KwaiCalciteSchema(null, proxySchema, EMPTY_STRING);
 
             engineSchemaMap.put(TableEngine.POSTGRESQL, kwaiCalciteSchema);
@@ -224,15 +225,16 @@ public class SqlPlanFixture {
 
     protected void createNewPostgresTables() throws SQLException {
         String url = getUrl();
-
+        int successCount = 0;
         try (Connection conn = DriverManager.getConnection(url, "postgres", "postgres")) {
             try (Statement statement = conn.createStatement()) {
                 for (String createTableSQL : createTableSQLs) {
-                    //log.info("Executing SQL in database: {}", createTableSQL);
+                    log.info("create table with sql:\n {}", createTableSQL);
                     statement.execute(createTableSQL);
+                    successCount ++;
                 }
             }
-            log.info("Successfully created tables in PostgreSQL database");
+            log.info("Successfully created {} tables in PostgreSQL database", successCount);
         } catch (SQLException e) {
             throw new SQLException("Failed to connect to PostgreSQL instance", e);
         }

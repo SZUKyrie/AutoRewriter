@@ -38,9 +38,12 @@ public class ManualProducePipeline extends ProducePipeline {
         long ruleRegStart = System.currentTimeMillis();
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
         for (int i = 0; i < ruleContexts.size(); i++) {
+            RuleAnalysisContext ruleContext = ruleContexts.get(i);
+            Class<? extends RelNode> rootClass =
+                    (Class<? extends RelNode>) ruleContext.getSourceRelNode().getClass();
             AutoRewriteRule rule = new AutoRewriteRule(
-                    RelOptRule.operand(org.apache.calcite.rel.logical.LogicalAggregate.class, RelOptRule.any()),
-                    ruleContexts.get(i),
+                    RelOptRule.operand(rootClass, RelOptRule.any()),
+                    ruleContext,
                     i
             );
             optimizer.addRule(rule);
@@ -55,6 +58,7 @@ public class ManualProducePipeline extends ProducePipeline {
             // parse sql and convert to orginal logical plan
             log.info("start to optimize query {}", historicalSqlRecord.getQueryId());
             RelNode relNode = SqlAnalyzer.analyze(historicalSqlRecord.getSql(), context.getComputeEngine()).getRelNode();
+            log.info("original query logical plan:\n {}", relNode.explain());
 
             OptimizationTrace trace = new OptimizationTrace();
             long startTime = System.currentTimeMillis();

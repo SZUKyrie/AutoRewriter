@@ -21,11 +21,11 @@ public class FilterMatcher implements RelNodeMatcher<LogicalFilter> {
 
     @Override
     public boolean match(LogicalFilter template, LogicalFilter query, Map<String, Object> bindings) {
-        log.info("Try match Filter: template condition={}, query condition={}",
-            template.getCondition(), query.getCondition());
+//        log.info("Try match Filter: template condition={}, query condition={}",
+//            template.getCondition(), query.getCondition());
 
         if (!recursiveMatchFunc.apply(template.getInput(), query.getInput())) {
-            log.info("match Filter Failed");
+            //log.info("match Filter Failed");
             return false;
         }
 
@@ -35,7 +35,7 @@ public class FilterMatcher implements RelNodeMatcher<LogicalFilter> {
         }
 
         if(result) {
-            log.info("match Filter success");
+            //log.info("match Filter success");
         }
 
         return result;

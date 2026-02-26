@@ -62,7 +62,7 @@ public class AutoRewriteRule extends RelOptRule {
         this.rewriteConstraints = ruleContext.getRewriteConstraints();
         this.placeholderBindings = new HashMap<>();
 
-        RexNodeMatcher rexNodeMatcher = new RexNodeMatcher();
+        RexNodeMatcher rexNodeMatcher = new RexNodeMatcher(this::recursiveMatchInternal);
         RexNodeFiller rexNodeFiller = new RexNodeFiller();
         this.constraintEvaluator = new ConstraintEvaluator();
 
@@ -86,13 +86,13 @@ public class AutoRewriteRule extends RelOptRule {
         placeholderBindings.clear();
 
         if (!recursiveMatch(sourceTemplate, queryNode, placeholderBindings)) {
-            log.debug("Rule[{}] match failed: structure does not match", ruleId);
+            log.info("Rule[{}] match failed: structure does not match", ruleId);
             return false;
         }
 
         boolean res = constraintEvaluator.checkMatchConstraints(matchConstraints, placeholderBindings);
         if(!res) {
-            log.debug("Rule[{}] match failed: constraints not satisfied", ruleId);
+            log.info("Rule[{}] match failed: constraints not satisfied", ruleId);
         } else {
             log.info("Rule[{}] match succeeded", ruleId);
         }
