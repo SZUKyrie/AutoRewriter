@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.util.ImmutableBitSet;
+import org.autorewriter.rewriter.rule.constraint.BindingResolver;
 import org.autorewriter.rewriter.rule.constraint.ConstraintHandler;
 import org.autorewriter.rewriter.rule.constraint.ConstraintUtils;
 
@@ -29,9 +30,9 @@ public class UniqueConstraintHandler implements ConstraintHandler {
             return true;
         }
 
-        Integer colIdx = ConstraintUtils.resolveColIndex(attrParam, bindings);
-        if (colIdx == null) {
-            log.debug("Unique({}, {}): column index not bound, skipping", tableParam, attrParam);
+        ImmutableBitSet colBits = BindingResolver.resolveColBits(attrParam, bindings, rel);
+        if (colBits == null) {
+            log.debug("Unique({}, {}): column ref not resolved, skipping", tableParam, attrParam);
             return true;
         }
 
@@ -43,16 +44,14 @@ public class UniqueConstraintHandler implements ConstraintHandler {
             return false;
         }
 
-        ImmutableBitSet colBit = ImmutableBitSet.of(colIdx);
         for (ImmutableBitSet key : uniqueKeys) {
-            if (key.equals(colBit)) {
-                log.debug("Unique({}, {}): col {} matched unique key -> true", tableParam, attrParam, colIdx);
+            if (colBits.contains(key)) {
+                log.debug("Unique({}, {}): cols {} contain unique key {} -> true", tableParam, attrParam, colBits, key);
                 return true;
             }
         }
 
-        log.debug("Unique({}, {}): col {} not a sole unique key, keys={}", tableParam, attrParam, colIdx, uniqueKeys);
+        log.debug("Unique({}, {}): cols {} do not contain any unique key, keys={}", tableParam, attrParam, colBits, uniqueKeys);
         return false;
     }
 }
-

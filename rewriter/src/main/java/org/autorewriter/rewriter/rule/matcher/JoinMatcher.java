@@ -36,6 +36,7 @@ public class JoinMatcher implements RelNodeMatcher<LogicalJoin> {
         RexNode templateCondition = template.getCondition();
         RexNode queryCondition = query.getCondition();
 
+        rexNodeMatcher.setQueryOperator(query);
         return rexNodeMatcher.match(templateCondition, queryCondition, bindings);
     }
 }

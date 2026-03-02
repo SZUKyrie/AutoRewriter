@@ -4,6 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
+import org.apache.calcite.rel.rules.ProjectMergeRule;
+import org.apache.calcite.rel.rules.SubQueryRemoveRule;
 import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.dialect.AnsiSqlDialect;
@@ -35,6 +37,10 @@ public class ManualProducePipeline extends ProducePipeline {
 
         // create rbo optimizer and register rules
         RuleBaseOptimizer optimizer = new RuleBaseOptimizer();
+        optimizer.addRule(SubQueryRemoveRule.Config.FILTER.toRule());
+        //optimizer.addRule(SubQueryRemoveRule.Config.PROJECT.toRule());
+        //optimizer.addRule(SubQueryRemoveRule.Config.JOIN.toRule());
+        optimizer.addRule(ProjectMergeRule.Config.DEFAULT.toRule());
         long ruleRegStart = System.currentTimeMillis();
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
         for (int i = 0; i < ruleContexts.size(); i++) {

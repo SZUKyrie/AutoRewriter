@@ -12,4 +12,9 @@ public class AutoRwFakeE2ETest extends AutoRwFakeE2ETesBase{
     public void testDiapora() {
         executePipeline(PipelineType.MANUAL, "diaspora", RULE_DIR);
     }
+
+    @Test
+    public void testDiapora2() {
+        executePipeline(PipelineType.MANUAL, "diaspora", RULE_DIR2);
+    }
 }

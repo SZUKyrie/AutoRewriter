@@ -30,6 +30,7 @@ public class AutoRwFakeE2ETesBase extends PostgresqlSchemaTestBase {
     private static final String RESOURCES_ROOT = resolveResourcesRoot();
 
     public  final static String RULE_DIR          = RESOURCES_ROOT + "example";
+    public  final static String RULE_DIR2          = RESOURCES_ROOT + "example2";
     public  final static String COMMON_TABLE_DDL  = RESOURCES_ROOT + "schema/common_table_ddl.sql";
     public  final static String E2E_TEST_TABLE_DDL = RESOURCES_ROOT + "schema/";
     protected final static String CUSTOM_TABLE_DDL  = "table_ddl.sql";

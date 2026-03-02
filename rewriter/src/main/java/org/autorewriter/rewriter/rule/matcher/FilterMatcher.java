@@ -6,10 +6,17 @@ import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.rex.RexSubQuery;
 import org.autorewriter.rewriter.rule.RelNodeMatcher;
+import org.autorewriter.rewriter.rule.util.ColumnRef;
+import org.autorewriter.rewriter.rule.util.ColumnRefResolver;
 import org.autorewriter.rewriter.rule.util.RexNodeMatcher;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiFunction;
 
 @Slf4j
@@ -21,43 +28,65 @@ public class FilterMatcher implements RelNodeMatcher<LogicalFilter> {
 
     @Override
     public boolean match(LogicalFilter template, LogicalFilter query, Map<String, Object> bindings) {
-//        log.info("Try match Filter: template condition={}, query condition={}",
-//            template.getCondition(), query.getCondition());
-
         if (!recursiveMatchFunc.apply(template.getInput(), query.getInput())) {
-            //log.info("match Filter Failed");
             return false;
         }
 
+        rexNodeMatcher.setQueryOperator(query.getInput());
         boolean result = rexNodeMatcher.match(template.getCondition(), query.getCondition(), bindings);
-        if (result && template.getCondition() instanceof RexCall) {
-            extractAndBindAttributes(template.getCondition(), query.getCondition(), bindings);
-        }
-
-        if(result) {
-            //log.info("match Filter success");
+        if (result) {
+            bindFilterAttributes(template, query, bindings);
         }
 
         return result;
     }
 
-    /**
-     * Extract and bind attributes from query condition to template condition.
-     * */
-    private void extractAndBindAttributes(RexNode template, RexNode query, Map<String, Object> bindings) {
-        if (template instanceof RexInputRef && query instanceof RexInputRef) {
-            RexInputRef templateRef = (RexInputRef) template;
-            RexInputRef queryRef = (RexInputRef) query;
+    private void bindFilterAttributes(LogicalFilter template, LogicalFilter query, Map<String, Object> bindings) {
+        List<String> templateFields = template.getRowType().getFieldNames();
+        List<String> attrPlaceholders = new ArrayList<>();
+        for (String f : templateFields) {
+            if (f.matches("a\\d+")) {
+                attrPlaceholders.add(f);
+            }
+        }
+        if (attrPlaceholders.isEmpty()) {
+            return;
+        }
 
-            String attrName = "a" + templateRef.getIndex();
-            bindings.put(attrName, queryRef);
-            log.debug("Bound attribute {} to field index {}", attrName, queryRef.getIndex());
-        } else if (template instanceof RexCall && query instanceof RexCall) {
-            RexCall templateCall = (RexCall) template;
-            RexCall queryCall = (RexCall) query;
+        List<ColumnRef> allColRefs = new ArrayList<>();
+        List<Integer> allIndices = new ArrayList<>();
+        Set<Integer> seen = new LinkedHashSet<>();
+        collectAllRexInputRefs(query.getCondition(), query, allColRefs, allIndices, seen);
 
-            for (int i = 0; i < templateCall.getOperands().size() && i < queryCall.getOperands().size(); i++) {
-                extractAndBindAttributes(templateCall.getOperands().get(i), queryCall.getOperands().get(i), bindings);
+        for (String attr : attrPlaceholders) {
+            if (!bindings.containsKey(attr + "_colref")) {
+                if (!allColRefs.isEmpty()) {
+                    bindings.put(attr + "_colref", allColRefs);
+                }
+                if (!allIndices.isEmpty()) {
+                    bindings.put(attr + "_index", allIndices);
+                }
+                log.debug("Filter bound {} to {} colrefs from condition", attr, allColRefs.size());
+            }
+        }
+    }
+
+    private void collectAllRexInputRefs(RexNode node, LogicalFilter queryFilter,
+                                         List<ColumnRef> colRefs, List<Integer> indices, Set<Integer> seen) {
+        if (node instanceof RexInputRef) {
+            RexInputRef ref = (RexInputRef) node;
+            int idx = ref.getIndex();
+            if (seen.add(idx)) {
+                indices.add(idx);
+                colRefs.add(ColumnRefResolver.resolve(idx, queryFilter.getInput()));
+            }
+        } else if (node instanceof RexCall) {
+            for (RexNode operand : ((RexCall) node).getOperands()) {
+                collectAllRexInputRefs(operand, queryFilter, colRefs, indices, seen);
+            }
+        } else if (node instanceof RexSubQuery) {
+            for (RexNode operand : ((RexSubQuery) node).getOperands()) {
+                collectAllRexInputRefs(operand, queryFilter, colRefs, indices, seen);
             }
         }
     }

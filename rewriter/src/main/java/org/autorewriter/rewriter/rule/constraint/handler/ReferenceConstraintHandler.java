@@ -1,19 +1,17 @@
 package org.autorewriter.rewriter.rule.constraint.handler;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.calcite.rel.RelNode;
+import org.autorewriter.rewriter.rule.constraint.BindingResolver;
 import org.autorewriter.rewriter.rule.constraint.ConstraintHandler;
+import org.autorewriter.rewriter.rule.constraint.ConstraintUtils;
+import org.autorewriter.rewriter.rule.util.ColumnRef;
 
 import java.util.Map;
+import java.util.Set;
 
-/**
- * Reference(t0, a0, t1, a1): verifies t0 == t1 (same table) and a0 == a1 (same column).
- * Delegates to TableEqConstraintHandler and AttrsEqConstraintHandler.
- */
 @Slf4j
 public class ReferenceConstraintHandler implements ConstraintHandler {
-
-    private final TableEqConstraintHandler tableEq = new TableEqConstraintHandler();
-    private final AttrsEqConstraintHandler attrsEq = new AttrsEqConstraintHandler();
 
     @Override
     public String getType() {
@@ -27,20 +25,29 @@ public class ReferenceConstraintHandler implements ConstraintHandler {
             return true;
         }
 
-        boolean tableMatch = tableEq.evaluate(new String[]{params[0], params[2]}, bindings);
-        if (!tableMatch) {
-            log.debug("Reference({}, {}, {}, {}): table mismatch", params[0], params[1], params[2], params[3]);
-            return false;
+        String t0Param = params[0];
+        String a0Param = params[1];
+        String t1Param = params[2];
+        String a1Param = params[3];
+
+        RelNode rel0 = ConstraintUtils.resolveRelNode(bindings.get(t0Param));
+        RelNode rel1 = ConstraintUtils.resolveRelNode(bindings.get(t1Param));
+
+        if (rel0 == null || rel1 == null) {
+            log.debug("Reference({}, {}, {}, {}): one or both tables not bound", t0Param, a0Param, t1Param, a1Param);
+            return true;
         }
 
-        boolean attrMatch = attrsEq.evaluate(new String[]{params[1], params[3]}, bindings);
-        if (!attrMatch) {
-            log.debug("Reference({}, {}, {}, {}): attr mismatch", params[0], params[1], params[2], params[3]);
-            return false;
+        Set<ColumnRef> cols0 = BindingResolver.resolveColRefSet(a0Param, bindings, rel0);
+        Set<ColumnRef> cols1 = BindingResolver.resolveColRefSet(a1Param, bindings, rel1);
+
+        if (cols0 == null || cols1 == null) {
+            log.debug("Reference({}, {}, {}, {}): cannot resolve columns", t0Param, a0Param, t1Param, a1Param);
+            return true;
         }
 
-        log.debug("Reference({}, {}, {}, {}): matched", params[0], params[1], params[2], params[3]);
-        return true;
+        boolean matched = cols0.equals(cols1);
+        log.debug("Reference({}, {}, {}, {}): {} vs {} = {}", t0Param, a0Param, t1Param, a1Param, cols0, cols1, matched);
+        return matched;
     }
 }
-

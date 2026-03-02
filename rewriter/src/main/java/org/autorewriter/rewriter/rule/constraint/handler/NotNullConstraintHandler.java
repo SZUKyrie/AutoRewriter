@@ -3,6 +3,7 @@ package org.autorewriter.rewriter.rule.constraint.handler;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.type.RelDataTypeField;
+import org.autorewriter.rewriter.rule.constraint.BindingResolver;
 import org.autorewriter.rewriter.rule.constraint.ConstraintHandler;
 import org.autorewriter.rewriter.rule.constraint.ConstraintUtils;
 
@@ -28,21 +29,21 @@ public class NotNullConstraintHandler implements ConstraintHandler {
             return true;
         }
 
-        Integer colIdx = ConstraintUtils.resolveColIndex(attrParam, bindings);
-        if (colIdx == null) {
-            log.debug("NotNull({}, {}): column index not bound, skipping", tableParam, attrParam);
+        List<Integer> indices = BindingResolver.resolveIndices(attrParam, bindings, rel);
+        if (indices == null) {
+            log.debug("NotNull({}, {}): column ref not bound, skipping", tableParam, attrParam);
             return true;
         }
 
         List<RelDataTypeField> fields = rel.getRowType().getFieldList();
-        if (colIdx >= fields.size()) {
-            log.debug("NotNull({}, {}): col index {} out of range ({})", tableParam, attrParam, colIdx, fields.size());
-            return true;
+        for (int colIdx : indices) {
+            if (colIdx >= 0 && colIdx < fields.size() && fields.get(colIdx).getType().isNullable()) {
+                log.debug("NotNull({}, {}): col {} is nullable -> false", tableParam, attrParam, colIdx);
+                return false;
+            }
         }
 
-        boolean nullable = fields.get(colIdx).getType().isNullable();
-        log.debug("NotNull({}, {}): col {} nullable={} -> notNull={}", tableParam, attrParam, colIdx, nullable, !nullable);
-        return !nullable;
+        log.debug("NotNull({}, {}): all columns not nullable -> true", tableParam, attrParam);
+        return true;
     }
 }
-

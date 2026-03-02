@@ -17,9 +17,8 @@ public class RexNodeFiller {
             int templateIndex = templateRef.getIndex();
             String attrName = "a" + templateIndex;
 
-            String indexKey = attrName + "_index";
-            if (bindings.containsKey(indexKey)) {
-                int actualIndex = (Integer) bindings.get(indexKey);
+            int actualIndex = resolveActualIndex(attrName, bindings, input);
+            if (actualIndex >= 0 && actualIndex < input.getRowType().getFieldCount()) {
                 return input.getCluster().getRexBuilder().makeInputRef(
                     input.getRowType().getFieldList().get(actualIndex).getType(),
                     actualIndex
@@ -62,12 +61,30 @@ public class RexNodeFiller {
             int templateIndex = templateRef.getIndex();
             String attrName = "a" + templateIndex;
 
-            String indexKey = attrName + "_index";
-            if (bindings.containsKey(indexKey)) {
-                int actualIndex = (Integer) bindings.get(indexKey);
+            int leftFieldCount = leftInput.getRowType().getFieldCount();
 
-                int leftFieldCount = leftInput.getRowType().getFieldCount();
+            Object colRefObj = bindings.get(attrName + "_colref");
+            if (colRefObj instanceof ColumnRef) {
+                ColumnRef colRef = (ColumnRef) colRefObj;
+                int leftIdx = ColumnRefResolver.resolveIndex(colRef, leftInput);
+                if (leftIdx >= 0) {
+                    return leftInput.getCluster().getRexBuilder().makeInputRef(
+                        leftInput.getRowType().getFieldList().get(leftIdx).getType(),
+                        leftIdx
+                    );
+                }
+                int rightIdx = ColumnRefResolver.resolveIndex(colRef, rightInput);
+                if (rightIdx >= 0) {
+                    return rightInput.getCluster().getRexBuilder().makeInputRef(
+                        rightInput.getRowType().getFieldList().get(rightIdx).getType(),
+                        leftFieldCount + rightIdx
+                    );
+                }
+            }
 
+            Object indexVal = bindings.get(attrName + "_index");
+            if (indexVal instanceof Integer) {
+                int actualIndex = (Integer) indexVal;
                 if (actualIndex < leftFieldCount) {
                     return leftInput.getCluster().getRexBuilder().makeInputRef(
                         leftInput.getRowType().getFieldList().get(actualIndex).getType(),
@@ -82,7 +99,6 @@ public class RexNodeFiller {
                 }
             }
 
-            int leftFieldCount = leftInput.getRowType().getFieldCount();
             if (templateIndex < leftFieldCount) {
                 return leftInput.getCluster().getRexBuilder().makeInputRef(
                     leftInput.getRowType().getFieldList().get(templateIndex).getType(),
@@ -118,5 +134,23 @@ public class RexNodeFiller {
         }
 
         return template;
+    }
+
+    /**
+     * Resolve actual column index from ColumnRef first, then fall back to _index.
+     */
+    private int resolveActualIndex(String attrName, Map<String, Object> bindings, RelNode input) {
+        Object colRefObj = bindings.get(attrName + "_colref");
+        if (colRefObj instanceof ColumnRef) {
+            int idx = ColumnRefResolver.resolveIndex((ColumnRef) colRefObj, input);
+            if (idx >= 0) {
+                return idx;
+            }
+        }
+        Object indexVal = bindings.get(attrName + "_index");
+        if (indexVal instanceof Integer) {
+            return (Integer) indexVal;
+        }
+        return -1;
     }
 }

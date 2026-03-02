@@ -92,10 +92,21 @@ public class ConstraintEvaluator {
                         value instanceof RelNode ? ((RelNode) value).getClass().getSimpleName() : value);
                 }
 
+                String sourceColRefKey = sourceParam + "_colref";
+                if (sourceBindings.containsKey(sourceColRefKey)) {
+                    targetBindings.put(targetParam + "_colref", sourceBindings.get(sourceColRefKey));
+                }
+
                 String sourceIndexKey = sourceParam + "_index";
                 if (sourceBindings.containsKey(sourceIndexKey)) {
                     Object indexValue = sourceBindings.get(sourceIndexKey);
                     targetBindings.put(targetParam + "_index", indexValue);
+                }
+
+                String sourceProjectsKey = sourceParam + "_projects";
+                if (sourceBindings.containsKey(sourceProjectsKey)) {
+                    Object projectsValue = sourceBindings.get(sourceProjectsKey);
+                    targetBindings.put(targetParam + "_projects", projectsValue);
                 }
             }
         }
