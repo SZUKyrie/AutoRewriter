@@ -4,26 +4,26 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelOptRuleOperand;
-import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.logical.*;
+import org.apache.calcite.rel.logical.LogicalProject;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
-import org.apache.shardingsphere.sql.parser.api.ASTNode;
 import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
-import org.autorewriter.rewriter.rule.constraint.ConstraintEvaluator;
-import org.autorewriter.rewriter.rule.filler.*;
-import org.autorewriter.rewriter.rule.matcher.*;
-import org.autorewriter.rewriter.rule.util.RexNodeFiller;
-import org.autorewriter.rewriter.rule.util.RexNodeMatcher;
+import org.autorewriter.rewriter.rule.constraint.Constraints;
+import org.autorewriter.rewriter.rule.instantiation.Instantiation;
+import org.autorewriter.rewriter.rule.match.Match;
+import org.autorewriter.rewriter.rule.model.Model;
+import org.autorewriter.rewriter.rule.symbol.Symbol;
+import org.autorewriter.rewriter.rule.symbol.SymbolExtractor;
 
 import java.util.*;
 
 /**
  * Auto rewrite rule that matches source template RelNode and rewrites to target template RelNode.
+ * Uses WeTune-style Symbol/Model/Match/Instantiation pipeline.
  */
 @Slf4j
 public class AutoRewriteRule extends RelOptRule {
@@ -31,23 +31,10 @@ public class AutoRewriteRule extends RelOptRule {
     private final int ruleId;
     private final RelNode sourceTemplate;
     private final RelNode targetTemplate;
-    private final List<ASTNode> matchConstraints;
-    private final List<ASTNode> rewriteConstraints;
-    private final Map<String, Object> placeholderBindings;
+    private final Constraints constraints;
 
-    private final TableScanMatcher tableScanMatcher;
-    private final ProjectMatcher projectMatcher;
-    private final FilterMatcher filterMatcher;
-    private final JoinMatcher joinMatcher;
-    private final AggregateMatcher aggregateMatcher;
-
-    private final TableScanFiller tableScanFiller;
-    private final ProjectFiller projectFiller;
-    private final FilterFiller filterFiller;
-    private final JoinFiller joinFiller;
-    private final AggregateFiller aggregateFiller;
-
-    private final ConstraintEvaluator constraintEvaluator;
+    // Model is created fresh per match attempt
+    private Model lastModel;
 
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext) {
         this(operand, ruleContext, -1);
@@ -58,59 +45,69 @@ public class AutoRewriteRule extends RelOptRule {
         this.ruleId = ruleId;
         this.sourceTemplate = ruleContext.getSourceRelNode();
         this.targetTemplate = ruleContext.getTargetRelNode();
-        this.matchConstraints = ruleContext.getMatchConstraints();
-        this.rewriteConstraints = ruleContext.getRewriteConstraints();
-        this.placeholderBindings = new HashMap<>();
 
-        RexNodeMatcher rexNodeMatcher = new RexNodeMatcher(this::recursiveMatchInternal);
-        RexNodeFiller rexNodeFiller = new RexNodeFiller();
-        this.constraintEvaluator = new ConstraintEvaluator();
+        // Extract symbols from source and target templates
+        Map<String, Symbol> sourceSymbols = SymbolExtractor.extract(sourceTemplate);
+        Map<String, Symbol> targetSymbols = SymbolExtractor.extract(targetTemplate);
 
-        this.tableScanMatcher = new TableScanMatcher();
-        this.projectMatcher = new ProjectMatcher(this::recursiveMatchInternal, rexNodeMatcher);
-        this.filterMatcher = new FilterMatcher(this::recursiveMatchInternal, rexNodeMatcher);
-        this.joinMatcher = new JoinMatcher(this::recursiveMatchInternal, rexNodeMatcher);
-        this.aggregateMatcher = new AggregateMatcher(this::recursiveMatchInternal);
-
-        this.tableScanFiller = new TableScanFiller();
-        this.projectFiller = new ProjectFiller(this::fillTargetTemplate, rexNodeFiller);
-        this.filterFiller = new FilterFiller(this::fillTargetTemplate, rexNodeFiller);
-        this.joinFiller = new JoinFiller(this::fillTargetTemplate, rexNodeFiller);
-        this.aggregateFiller = new AggregateFiller(this::fillTargetTemplate);
+        // Build constraints: pass match and rewrite constraints separately
+        // so that unknown symbols (e.g., schema symbols not in RelNode row types)
+        // can be correctly classified as source-side or target-side.
+        // matchConstraints has same-side eq and integrity constraints,
+        // rewriteConstraints has cross-side eq (target=source mappings)
+        this.constraints = Constraints.build(
+                ruleContext.getMatchConstraints(),
+                ruleContext.getRewriteConstraints(),
+                sourceSymbols, targetSymbols);
     }
 
     @Override
     public boolean matches(RelOptRuleCall call) {
         log.debug("Trying to match rule[{}] on node: {}", ruleId, call.rel(0).getClass().getSimpleName());
         RelNode queryNode = call.rel(0);
-        placeholderBindings.clear();
 
-        if (!recursiveMatch(sourceTemplate, queryNode, placeholderBindings)) {
+        // Create a fresh Model for this match attempt
+        Model model = new Model(constraints);
+
+        if (!Match.match(sourceTemplate, queryNode, model)) {
             log.info("Rule[{}] match failed: structure does not match", ruleId);
             return false;
         }
 
-        boolean res = constraintEvaluator.checkMatchConstraints(matchConstraints, placeholderBindings);
-        if(!res) {
+        // Check all constraints (ATTRS_SUB, UNIQUE, NOT_NULL, REFERENCE)
+        if (!model.checkConstraints()) {
             log.info("Rule[{}] match failed: constraints not satisfied", ruleId);
-        } else {
-            log.info("Rule[{}] match succeeded", ruleId);
+            return false;
         }
-        return res;
+
+        log.info("Rule[{}] match succeeded", ruleId);
+        this.lastModel = model;
+        return true;
     }
 
     @Override
     public void onMatch(RelOptRuleCall call) {
-        log.debug("Rule matched, bindings: {}", placeholderBindings.keySet());
-        Map<String, Object> rewriteBindings = constraintEvaluator.applyRewriteConstraints(rewriteConstraints, placeholderBindings);
-        log.debug("Rewrite bindings: {}", rewriteBindings.keySet());
+        log.debug("Rule[{}] matched, applying rewrite", ruleId);
 
-        RelNode rewrittenNode = fillTargetTemplate(targetTemplate, rewriteBindings);
+        try {
+            RelNode rewrittenNode = Instantiation.instantiate(targetTemplate, lastModel, constraints);
 
-        RelNode originalNode = call.rel(0);
-        RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
+            RelNode originalNode = call.rel(0);
+            RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
 
-        call.transformTo(adjustedNode);
+            // Verify row type compatibility before transforming — Calcite's HepPlanner
+            // will throw if the field counts don't match
+            if (adjustedNode.getRowType().getFieldCount() != originalNode.getRowType().getFieldCount()) {
+                log.warn("Rule[{}] rewrite aborted: field count mismatch (expected {}, got {})",
+                        ruleId, originalNode.getRowType().getFieldCount(),
+                        adjustedNode.getRowType().getFieldCount());
+                return;
+            }
+
+            call.transformTo(adjustedNode);
+        } catch (Exception e) {
+            log.warn("Rule[{}] rewrite failed: {}", ruleId, e.getMessage());
+        }
     }
 
     private RelNode adjustRowType(RelNode node, RelDataType expectedType) {
@@ -177,75 +174,5 @@ public class AutoRewriteRule extends RelOptRule {
         }
 
         return LogicalProject.create(node, Collections.emptyList(), castExprs, fieldNames);
-    }
-
-    private RelNode unwrapHepVertex(RelNode node) {
-        if (node instanceof HepRelVertex) {
-            return ((HepRelVertex) node).getCurrentRel();
-        }
-        return node;
-    }
-
-    private boolean recursiveMatch(RelNode template, RelNode query, Map<String, Object> bindings) {
-        query = unwrapHepVertex(query);
-
-//        log.info("recursiveMatch: template={}, query={}",
-//            template.getClass().getSimpleName(), query.getClass().getSimpleName());
-
-        if (template instanceof LogicalTableScan) {
-            return tableScanMatcher.matchInputPlaceholder((LogicalTableScan) template, query, bindings);
-        }
-
-        if (!template.getClass().equals(query.getClass())) {
-//            log.info("Class mismatch: {} != {}",
-//                template.getClass().getSimpleName(), query.getClass().getSimpleName());
-            return false;
-        }
-
-        if (template instanceof LogicalProject) {
-            return projectMatcher.match((LogicalProject) template, (LogicalProject) query, bindings);
-        } else if (template instanceof LogicalFilter) {
-            return filterMatcher.match((LogicalFilter) template, (LogicalFilter) query, bindings);
-        } else if (template instanceof LogicalJoin) {
-            return joinMatcher.match((LogicalJoin) template, (LogicalJoin) query, bindings);
-        } else if (template instanceof LogicalAggregate) {
-            return aggregateMatcher.match((LogicalAggregate) template, (LogicalAggregate) query, bindings);
-        }
-
-        if (template.getInputs().size() != query.getInputs().size()) {
-            return false;
-        }
-
-        for (int i = 0; i < template.getInputs().size(); i++) {
-            if (!recursiveMatch(template.getInput(i), query.getInput(i), bindings)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private Boolean recursiveMatchInternal(RelNode template, RelNode query) {
-        return recursiveMatch(template, query, placeholderBindings);
-    }
-
-    private RelNode fillTargetTemplate(RelNode template, Map<String, Object> bindings) {
-        if (template instanceof LogicalTableScan) {
-            return tableScanFiller.fill((LogicalTableScan) template, bindings);
-        } else if (template instanceof LogicalProject) {
-            return projectFiller.fill((LogicalProject) template, bindings);
-        } else if (template instanceof LogicalFilter) {
-            return filterFiller.fill((LogicalFilter) template, bindings);
-        } else if (template instanceof LogicalJoin) {
-            return joinFiller.fill((LogicalJoin) template, bindings);
-        } else if (template instanceof LogicalAggregate) {
-            return aggregateFiller.fill((LogicalAggregate) template, bindings);
-        }
-
-        return template;
-    }
-
-    private RelNode fillTargetTemplate(RelNode template) {
-        return fillTargetTemplate(template, placeholderBindings);
     }
 }

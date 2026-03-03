@@ -4,6 +4,7 @@ import org.apache.shardingsphere.sql.parser.api.ASTNode;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment;
 import org.autorewriter.rewriter.rule.model.NaturalCongruence;
 import org.autorewriter.rewriter.rule.symbol.Symbol;
+import org.autorewriter.rewriter.rule.symbol.SymbolKind;
 
 import java.util.AbstractList;
 import java.util.ArrayList;
@@ -55,15 +56,61 @@ public class Constraints extends AbstractList<Constraint> {
      * Builds a {@code Constraints} instance from parsed ShardingSphere
      * {@link ConstraintSegment} AST nodes.
      *
-     * @param constraintSegments the raw AST nodes (only {@link ConstraintSegment} instances
-     *                           are processed; others are silently skipped)
+     * <p>Accepts match constraints and rewrite constraints separately so that
+     * symbols not found in the extracted symbol maps (e.g., schema symbols that
+     * the template parser doesn't embed in RelNode row types) can be correctly
+     * classified as source-side or target-side:
+     * <ul>
+     *   <li>Match constraints: all symbols are source-side</li>
+     *   <li>Rewrite constraints: for equality constraints, second param is source,
+     *       first param is target; for other constraint types, all symbols are target-side</li>
+     * </ul>
+     *
+     * @param matchConstraints   same-side (source) constraints
+     * @param rewriteConstraints cross-side (target→source) constraints
      * @param sourceSymbols      map of placeholder name → {@link Symbol} for the source side
      * @param targetSymbols      map of placeholder name → {@link Symbol} for the target side
      * @return a fully constructed {@code Constraints}
      */
+    public static Constraints build(List<ASTNode> matchConstraints,
+                                    List<ASTNode> rewriteConstraints,
+                                    Map<String, Symbol> sourceSymbols,
+                                    Map<String, Symbol> targetSymbols) {
+        // Create mutable copies so we can add auto-created symbols
+        Map<String, Symbol> srcMap = new HashMap<>(sourceSymbols);
+        Map<String, Symbol> tgtMap = new HashMap<>(targetSymbols);
+
+        List<Constraint> raw = new ArrayList<>();
+
+        // Process match constraints — unknown symbols are source-side
+        for (ASTNode node : matchConstraints) {
+            if (!(node instanceof ConstraintSegment)) continue;
+            raw.add(parseConstraint((ConstraintSegment) node, srcMap, tgtMap, true));
+        }
+
+        // Process rewrite constraints — for eq constraints: param[0]=target, param[1]=source
+        for (ASTNode node : rewriteConstraints) {
+            if (!(node instanceof ConstraintSegment)) continue;
+            raw.add(parseConstraint((ConstraintSegment) node, srcMap, tgtMap, false));
+        }
+
+        Set<String> srcKeys = srcMap.keySet();
+        return buildInternal(raw, srcKeys, srcMap, tgtMap);
+    }
+
+    /**
+     * Convenience overload that combines match and rewrite constraints into a single list.
+     * Unknown symbols are auto-created if they match the symbol naming pattern.
+     * Side classification uses a heuristic: if a peer of the same kind prefix exists
+     * in one side, the unknown symbol goes to the other side.
+     */
     public static Constraints build(List<ASTNode> constraintSegments,
                                     Map<String, Symbol> sourceSymbols,
                                     Map<String, Symbol> targetSymbols) {
+        // Create mutable copies so we can add auto-created symbols
+        Map<String, Symbol> srcMap = new HashMap<>(sourceSymbols);
+        Map<String, Symbol> tgtMap = new HashMap<>(targetSymbols);
+
         List<Constraint> raw = new ArrayList<>();
         for (ASTNode node : constraintSegments) {
             if (!(node instanceof ConstraintSegment)) {
@@ -74,21 +121,80 @@ public class Constraints extends AbstractList<Constraint> {
             String[] params = cs.getParams();
             Symbol[] syms = new Symbol[params.length];
             for (int i = 0; i < params.length; i++) {
-                Symbol sym = sourceSymbols.get(params[i]);
-                if (sym == null) {
-                    sym = targetSymbols.get(params[i]);
-                }
-                if (sym == null) {
-                    throw new IllegalArgumentException(
-                            "Symbol not found for param: " + params[i]);
-                }
-                syms[i] = sym;
+                syms[i] = resolveOrCreateSymbol(params[i], srcMap, tgtMap);
             }
             raw.add(Constraint.of(kind, syms));
         }
 
-        Set<String> srcKeys = sourceSymbols.keySet();
-        return buildInternal(raw, srcKeys, sourceSymbols, targetSymbols);
+        Set<String> srcKeys = srcMap.keySet();
+        return buildInternal(raw, srcKeys, srcMap, tgtMap);
+    }
+
+    private static Constraint parseConstraint(ConstraintSegment cs,
+                                               Map<String, Symbol> srcMap,
+                                               Map<String, Symbol> tgtMap,
+                                               boolean isMatchConstraint) {
+        ConstraintKind kind = ConstraintKind.fromShardingSphere(cs.getType().name());
+        String[] params = cs.getParams();
+        Symbol[] syms = new Symbol[params.length];
+        for (int i = 0; i < params.length; i++) {
+            Symbol sym = srcMap.get(params[i]);
+            if (sym == null) {
+                sym = tgtMap.get(params[i]);
+            }
+            if (sym == null && SymbolKind.isSymbolName(params[i])) {
+                sym = Symbol.of(params[i]);
+                if (isMatchConstraint) {
+                    // Match constraints are source-side only
+                    srcMap.put(params[i], sym);
+                } else if (kind.isEq() && i == 1) {
+                    // For rewrite eq constraints, second param is source
+                    srcMap.put(params[i], sym);
+                } else {
+                    // For rewrite eq constraints first param, or non-eq, assume target
+                    tgtMap.put(params[i], sym);
+                }
+            }
+            if (sym == null) {
+                throw new IllegalArgumentException(
+                        "Symbol not found for param: " + params[i]);
+            }
+            syms[i] = sym;
+        }
+        return Constraint.of(kind, syms);
+    }
+
+    private static Symbol resolveOrCreateSymbol(String param,
+                                                 Map<String, Symbol> srcMap,
+                                                 Map<String, Symbol> tgtMap) {
+        Symbol sym = srcMap.get(param);
+        if (sym == null) {
+            sym = tgtMap.get(param);
+        }
+        if (sym == null && SymbolKind.isSymbolName(param)) {
+            sym = Symbol.of(param);
+            // Heuristic: put in whichever side doesn't have a symbol of this kind
+            if (hasSymbolWithPrefix(srcMap, param.charAt(0))
+                    && !hasSymbolWithPrefix(tgtMap, param.charAt(0))) {
+                tgtMap.put(param, sym);
+            } else {
+                srcMap.put(param, sym);
+            }
+        }
+        if (sym == null) {
+            throw new IllegalArgumentException(
+                    "Symbol not found for param: " + param);
+        }
+        return sym;
+    }
+
+    private static boolean hasSymbolWithPrefix(Map<String, Symbol> symbols, char prefix) {
+        for (String name : symbols.keySet()) {
+            if (name.charAt(0) == prefix) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ── Factory: from pre-built Constraint objects (for testing) ────────
