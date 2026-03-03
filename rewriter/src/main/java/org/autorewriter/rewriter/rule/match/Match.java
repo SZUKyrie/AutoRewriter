@@ -423,7 +423,7 @@ public class Match {
     /**
      * Unwrap HepRelVertex to get the real underlying RelNode.
      */
-    static RelNode unwrapHepVertex(RelNode node) {
+    public static RelNode unwrapHepVertex(RelNode node) {
         while (node instanceof HepRelVertex) {
             node = ((HepRelVertex) node).getCurrentRel();
         }
