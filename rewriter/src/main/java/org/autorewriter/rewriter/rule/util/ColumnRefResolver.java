@@ -4,10 +4,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
+import org.apache.calcite.rel.metadata.JaninoRelMetadataProvider;
 import org.apache.calcite.rel.metadata.RelColumnOrigin;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.type.RelDataTypeField;
-import org.autorewriter.rewriter.rule.constraint.ConstraintUtils;
 
 import java.util.List;
 import java.util.Set;
@@ -18,7 +19,14 @@ import java.util.Set;
 @Slf4j
 public final class ColumnRefResolver {
 
+    private static final JaninoRelMetadataProvider METADATA_PROVIDER =
+            JaninoRelMetadataProvider.of(DefaultRelMetadataProvider.INSTANCE);
+
     private ColumnRefResolver() {}
+
+    private static RelMetadataQuery createMetadataQuery() {
+        return new RelMetadataQuery(METADATA_PROVIDER);
+    }
 
     /**
      * Resolve a column index within the given operator to a stable ColumnRef
@@ -28,7 +36,7 @@ public final class ColumnRefResolver {
         operator = unwrap(operator);
 
         try {
-            RelMetadataQuery mq = ConstraintUtils.createMetadataQuery();
+            RelMetadataQuery mq = createMetadataQuery();
             Set<RelColumnOrigin> origins = mq.getColumnOrigins(operator, fieldIndex);
 
             if (origins != null && !origins.isEmpty()) {
@@ -60,7 +68,7 @@ public final class ColumnRefResolver {
         List<RelDataTypeField> fields = operator.getRowType().getFieldList();
 
         try {
-            RelMetadataQuery mq = ConstraintUtils.createMetadataQuery();
+            RelMetadataQuery mq = createMetadataQuery();
             for (int i = 0; i < fields.size(); i++) {
                 Set<RelColumnOrigin> origins = mq.getColumnOrigins(operator, i);
                 if (origins != null && !origins.isEmpty()) {
