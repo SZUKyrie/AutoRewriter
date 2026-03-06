@@ -8,6 +8,7 @@ import org.autorewriter.rewriter.analyze.RuleAnalyzer;
 import org.autorewriter.rewriter.historical.HistoricalSqlRecord;
 import org.autorewriter.rewriter.pipleline.ProduceContext;
 import org.autorewriter.rewriter.pipleline.ProducePipeline;
+import org.autorewriter.rewriter.pipleline.costbase.CostBaseProducePipeline;
 import org.autorewriter.rewriter.pipleline.manual.ManualProducePipeline;
 import org.autorewriter.sql.analyze.PostgresqlSchemaTestBase;
 import org.junit.BeforeClass;
@@ -148,10 +149,14 @@ public class AutoRwFakeE2ETesBase extends PostgresqlSchemaTestBase {
     }
 
     private ProducePipeline createPipeline(PipelineType pipelineType) {
-        if(Objects.requireNonNull(pipelineType) == PipelineType.MANUAL) {
-            return new ManualProducePipeline();
+        switch (pipelineType) {
+            case MANUAL:
+                return new ManualProducePipeline();
+            case CBO:
+                return new CostBaseProducePipeline();
+            default:
+                throw new IllegalArgumentException("unsupported pipeline type: " + pipelineType);
         }
-        throw new IllegalArgumentException("unsupported pipeline type: " + pipelineType);
     }
 
     private void executePipelineWithContext(ProducePipeline pipeline, ProduceContext context) {

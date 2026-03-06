@@ -17,4 +17,19 @@ public class AutoRwFakeE2ETest extends AutoRwFakeE2ETesBase{
     public void testDiapora2() {
         executePipeline(PipelineType.MANUAL, "diaspora", RULE_DIR2);
     }
+
+    @Test
+    public void testTpcdsCbo() {
+        executePipeline(PipelineType.CBO, "tpcds", RULE_DIR);
+    }
+
+    @Test
+    public void testDiasporaCbo() {
+        executePipeline(PipelineType.CBO, "diaspora", RULE_DIR);
+    }
+
+    @Test
+    public void testDiaspora2Cbo() {
+        executePipeline(PipelineType.CBO, "diaspora", RULE_DIR2);
+    }
 }

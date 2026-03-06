@@ -102,6 +102,13 @@
             <scope>compile</scope>
         </dependency>
 
+        <!-- Immutables annotations (required by Calcite JdbcConvention) -->
+        <dependency>
+            <groupId>org.immutables</groupId>
+            <artifactId>value-annotations</artifactId>
+            <version>2.10.1</version>
+        </dependency>
+
         <!-- Test dependencies -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

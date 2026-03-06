@@ -3,6 +3,7 @@ package org.autorewriter.rewriter.optimize.trace;
 import lombok.Getter;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.convert.ConverterRule;
 
 /**
  * Records a single successful rule application during HepPlanner optimization.
@@ -40,8 +41,10 @@ public class RuleApplicationStep {
 
     @Override
     public String toString() {
-        return String.format("[Step %d] Rule: %s | %s => %s",
+        String ruleType = (rule instanceof ConverterRule) ? "Conversion" : "Logical";
+        return String.format("[Step %d] [%s] %s | %s => %s",
                 stepIndex,
+                ruleType,
                 rule.getClass().getSimpleName(),
                 matchedRelNode.getRelTypeName(),
                 producedRelNode.getRelTypeName());
