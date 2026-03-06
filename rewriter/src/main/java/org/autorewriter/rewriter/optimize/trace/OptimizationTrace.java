@@ -3,6 +3,7 @@ package org.autorewriter.rewriter.optimize.trace;
 import lombok.Getter;
 import org.apache.calcite.rel.RelNode;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -64,6 +65,16 @@ public class OptimizationTrace {
             sb.append("  ").append(step).append("\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * Export the rewrite exploration tree as a PNG image via Graphviz.
+     *
+     * @param outputPath file path for the output PNG
+     * @throws IOException if DOT generation or rendering fails
+     */
+    public void exportTreePng(String outputPath) throws IOException {
+        TraceTreeVisualizer.exportToPng(this, outputPath);
     }
 }
 

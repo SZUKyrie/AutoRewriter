@@ -21,6 +21,11 @@ import org.apache.calcite.rel.rules.CoreRules;
 import org.apache.calcite.rel.rules.JoinCommuteRule;
 import org.apache.calcite.sql.dialect.PostgresqlSqlDialect;
 import org.autorewriter.rewriter.optimize.BaseOptimizer;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.FilterToInSubFilterRule;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterToFilterRule;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.JdbcInSubFilterRule;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.SubQueryTreeResolver;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.PostgresTableScanRule;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
@@ -78,6 +83,8 @@ public class CostBaseOptimizer implements BaseOptimizer {
         // Preprocess: split AND-conjoined filters into individual filter nodes
         root = FilterSplitter.split(root);
 
+        root = InSubFilterExpander.expand(root);
+
         VolcanoPlanner planner;
         if (costFactory != null) {
             planner = new VolcanoPlanner(costFactory, null);
@@ -104,6 +111,11 @@ public class CostBaseOptimizer implements BaseOptimizer {
 
         // Register table scan conversion rule (bridges AbstractTable to JdbcConvention)
         planner.addRule(PostgresTableScanRule.create(convention));
+
+        // InSubFilter: expose IN-subquery as two-child operator for CBO exploration
+        planner.addRule(FilterToInSubFilterRule.INSTANCE);
+        planner.addRule(InSubFilterToFilterRule.INSTANCE);
+        planner.addRule(JdbcInSubFilterRule.create(convention));
 
         // AbstractConverter expansion rule helps the planner bridge convention gaps
         planner.addRule(AbstractConverter.ExpandConversionRule.Config.DEFAULT.toRule());
@@ -155,6 +167,14 @@ public class CostBaseOptimizer implements BaseOptimizer {
         planner.setRoot(root);
 
         RelNode bestPlan = planner.findBestExp();
+
+        // Post-process: resolve RelSubset and LogicalInSubFilter references
+        // inside RexSubQuery.rel trees. findBestExp() only resolves the main
+        // plan tree via getInputs(); RexSubQuery.rel inside filter conditions
+        // may still contain RelSubset wrappers and LogicalInSubFilter nodes
+        // that RelToSqlConverter cannot handle.
+        bestPlan = SubQueryTreeResolver.resolve(bestPlan);
+
         log.info("CBO optimization completed, {} user rules + JDBC conversion rules registered",
                 rules.size());
 

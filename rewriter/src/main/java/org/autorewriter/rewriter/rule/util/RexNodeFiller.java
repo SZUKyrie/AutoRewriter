@@ -4,12 +4,24 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.rex.RexSubQuery;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 
 public class RexNodeFiller {
+
+    private final BiFunction<RelNode, Map<String, Object>, RelNode> fillRelNodeFunc;
+
+    public RexNodeFiller() {
+        this.fillRelNodeFunc = null;
+    }
+
+    public RexNodeFiller(BiFunction<RelNode, Map<String, Object>, RelNode> fillRelNodeFunc) {
+        this.fillRelNodeFunc = fillRelNodeFunc;
+    }
 
     public RexNode fill(RexNode template, Map<String, Object> bindings, RelNode input) {
         if (template instanceof RexInputRef) {
@@ -33,6 +45,21 @@ public class RexNodeFiller {
             }
 
             return template;
+        }
+
+        if (template instanceof RexSubQuery && fillRelNodeFunc != null) {
+            RexSubQuery templateSub = (RexSubQuery) template;
+
+            List<RexNode> filledOperands = new ArrayList<>();
+            for (RexNode operand : templateSub.getOperands()) {
+                filledOperands.add(fill(operand, bindings, input));
+            }
+
+            RelNode filledRel = fillRelNodeFunc.apply(templateSub.rel, bindings);
+
+            RexSubQuery withOperands = (RexSubQuery) templateSub.clone(
+                    templateSub.getType(), filledOperands);
+            return withOperands.clone(filledRel);
         }
 
         if (template instanceof RexCall) {
@@ -115,6 +142,21 @@ public class RexNodeFiller {
             }
 
             return template;
+        }
+
+        if (template instanceof RexSubQuery && fillRelNodeFunc != null) {
+            RexSubQuery templateSub = (RexSubQuery) template;
+
+            List<RexNode> filledOperands = new ArrayList<>();
+            for (RexNode operand : templateSub.getOperands()) {
+                filledOperands.add(fillJoinCondition(operand, bindings, leftInput, rightInput));
+            }
+
+            RelNode filledRel = fillRelNodeFunc.apply(templateSub.rel, bindings);
+
+            RexSubQuery withOperands = (RexSubQuery) templateSub.clone(
+                    templateSub.getType(), filledOperands);
+            return withOperands.clone(filledRel);
         }
 
         if (template instanceof RexCall) {

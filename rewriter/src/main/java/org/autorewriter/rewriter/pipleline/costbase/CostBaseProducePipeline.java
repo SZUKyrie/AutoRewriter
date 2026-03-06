@@ -20,6 +20,9 @@ import org.autorewriter.rewriter.pipleline.result.ProduceResult;
 import org.autorewriter.rewriter.rule.AutoRewriteRule;
 import org.autorewriter.sql.analyze.SqlAnalyzer;
 
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 
 @Slf4j
@@ -93,9 +96,26 @@ public class CostBaseProducePipeline extends ProducePipeline {
             }
             produceResult.getOptimizeResults().add(optimizeResult);
             log.info("finish CBO optimize query {}", historicalSqlRecord.getQueryId());
+
+            // Export optimization trace tree as PNG
+            exportTraceTree(trace, historicalSqlRecord.getQueryId());
         }
         produceResult.setSuccess(true);
         return produceResult;
+    }
+
+    private void exportTraceTree(OptimizationTrace trace, String queryId) {
+        if (trace.firedCount() == 0) {
+            return;
+        }
+        try {
+            Path outputDir = Paths.get("output", "trace");
+            String filename = "trace-" + queryId + ".png";
+            Path outputPath = outputDir.resolve(filename);
+            trace.exportTreePng(outputPath.toString());
+        } catch (IOException e) {
+            log.warn("Failed to export trace tree for query {}: {}", queryId, e.getMessage());
+        }
     }
 
     private String relNodeToSql(RelNode relNode) {

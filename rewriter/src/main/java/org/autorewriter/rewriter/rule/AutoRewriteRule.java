@@ -63,7 +63,7 @@ public class AutoRewriteRule extends RelOptRule {
         this.placeholderBindings = new HashMap<>();
 
         RexNodeMatcher rexNodeMatcher = new RexNodeMatcher(this::recursiveMatchInternal);
-        RexNodeFiller rexNodeFiller = new RexNodeFiller();
+        RexNodeFiller rexNodeFiller = new RexNodeFiller(this::fillTargetTemplate);
         this.constraintEvaluator = new ConstraintEvaluator();
 
         this.tableScanMatcher = new TableScanMatcher();

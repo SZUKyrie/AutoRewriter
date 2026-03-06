@@ -3,8 +3,10 @@ package org.autorewriter.rewriter.optimize.ruleBaseOpt;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.hep.HepMatchOrder;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.rex.RexSubQuery;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.schema.impl.AbstractTable;
@@ -513,6 +515,68 @@ public class RuleBaseOptimizerTest {
             System.out.println("Test failed: " + e.getMessage());
             e.printStackTrace();
             fail("Test should not throw exception: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Test 12: InSubFilter rule template - verify RexSubQuery filling works.
+     *
+     * <p>Rule: InSubFilter<a0>(Input<t0>,Input<t1>) -> InSubFilter<a1>(Input<t2>,Input<t3>)</p>
+     * <p>This is an identity rewrite that exercises the full InSubFilter matching + filling path.
+     * Without RexSubQuery support in RexNodeFiller, the target template's subquery
+     * would pass through unfilled (with placeholder table scans), producing an invalid result.</p>
+     */
+    @Test
+    public void testInSubFilterRuleTemplateRewrite() {
+        String testName = "InSubFilter Rule Template Rewrite";
+        String ruleStr = "InSubFilter<a0>(Input<t0>,Input<t1>)"
+                + "|InSubFilter<a1>(Input<t2>,Input<t3>)"
+                + "|TableEq(t2,t0);TableEq(t3,t1);AttrsEq(a1,a0)";
+
+        RuleAnalysisContext ruleContext = RuleAnalyzer.analyze(ruleStr);
+        assertNotNull(ruleContext, "Failed to parse InSubFilter rule template");
+        assertNotNull(ruleContext.getSourceRelNode());
+        assertNotNull(ruleContext.getTargetRelNode());
+
+        // InSubFilter is parsed as LogicalFilter with RexSubQuery condition
+        AutoRewriteRule rule = new AutoRewriteRule(
+                RelOptRule.operand(org.apache.calcite.rel.logical.LogicalFilter.class, RelOptRule.any()),
+                ruleContext
+        );
+
+        RuleBaseOptimizer optimizer = new RuleBaseOptimizer();
+        optimizer.addRule(rule);
+
+        try {
+            // Build subquery: SELECT customer_id FROM orders
+            relBuilder.clear();
+            RelNode subquery = relBuilder
+                    .scan("orders")
+                    .project(relBuilder.field("customer_id"))
+                    .build();
+
+            // Build outer: SELECT * FROM customers WHERE id IN (subquery)
+            relBuilder.clear();
+            RelNode query = relBuilder
+                    .scan("customers")
+                    .filter(
+                            RexSubQuery.in(subquery,
+                                    com.google.common.collect.ImmutableList.of(
+                                            relBuilder.field("id"))))
+                    .build();
+
+            RelNode optimized = optimizer.optimize(query);
+            assertNotNull(optimized, "Optimization should produce a non-null result");
+
+            printUnifiedOutput(testName, ruleStr, query, optimized);
+
+            // Verify result is a LogicalFilter (InSubFilter maps to LogicalFilter)
+            assertTrue(optimized instanceof org.apache.calcite.rel.logical.LogicalFilter,
+                    "Expected LogicalFilter but got " + optimized.getClass().getSimpleName());
+        } catch (Exception e) {
+            System.out.println("Test failed: " + e.getMessage());
+            e.printStackTrace();
+            fail("InSubFilter rule rewrite should not throw: " + e.getMessage());
         }
     }
 }
