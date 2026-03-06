@@ -95,12 +95,6 @@ public class CostBaseOptimizer implements BaseOptimizer {
         planner.addRelTraitDef(ConventionTraitDef.INSTANCE);
         planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
 
-        // IMPORTANT: All conversion rules must be registered BEFORE changeTraits/setRoot.
-        // In the custom Calcite 1.38.0-U6 fork, rules added via addRule() during
-        // findBestExp() do NOT retroactively fire against already-registered nodes.
-        // JdbcConvention.register() auto-registration happens too late (triggered by
-        // the first JdbcConvention node), so we must register all rules eagerly here.
-
         // Register JDBC conversion rules (exclude JdbcToEnumerableConverterRule
         // since we target JdbcConvention, not EnumerableConvention)
         for (RelOptRule rule : JdbcRules.rules(convention)) {
