@@ -17,8 +17,11 @@ import org.apache.calcite.plan.volcano.VolcanoPlanner;
 import org.apache.calcite.rel.RelCollationTraitDef;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
+import org.apache.calcite.rel.rules.CoreRules;
+import org.apache.calcite.rel.rules.JoinCommuteRule;
 import org.apache.calcite.sql.dialect.PostgresqlSqlDialect;
 import org.autorewriter.rewriter.optimize.BaseOptimizer;
+import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.PostgresTableScanRule;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.optimize.trace.RuleTraceListener;
@@ -72,6 +75,9 @@ public class CostBaseOptimizer implements BaseOptimizer {
     }
 
     public RelNode optimize(RelNode root, OptimizationTrace trace) {
+        // Preprocess: split AND-conjoined filters into individual filter nodes
+        root = FilterSplitter.split(root);
+
         VolcanoPlanner planner;
         if (costFactory != null) {
             planner = new VolcanoPlanner(costFactory, null);
@@ -101,6 +107,20 @@ public class CostBaseOptimizer implements BaseOptimizer {
 
         // AbstractConverter expansion rule helps the planner bridge convention gaps
         planner.addRule(AbstractConverter.ExpandConversionRule.Config.DEFAULT.toRule());
+
+        // Logical transformation rules for join reordering
+        // Commutativity: A ⋈ B → B ⋈ A (including LEFT↔RIGHT)
+        planner.addRule(CoreRules.JOIN_COMMUTE.config
+                .as(JoinCommuteRule.Config.class)
+                .withSwapOuter(true)
+                .toRule()
+        );
+        // Associativity: (A ⋈ B) ⋈ C → A ⋈ (B ⋈ C)
+        planner.addRule(CoreRules.JOIN_ASSOCIATE);
+        // Push join conditions into children
+        //planner.addRule(CoreRules.JOIN_CONDITION_PUSH);
+        // Push transitive predicates through join
+        //planner.addRule(CoreRules.JOIN_PUSH_TRANSITIVE_PREDICATES);
 
         // Register user-added rules (logical transformations, AutoRewriteRules, etc.)
         for (RelOptRule rule : rules) {

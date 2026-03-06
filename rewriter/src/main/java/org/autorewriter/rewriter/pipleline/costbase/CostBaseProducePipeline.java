@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
+import org.apache.calcite.rel.rules.JoinCommuteRule;
 import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.dialect.AnsiSqlDialect;
@@ -35,7 +36,6 @@ public class CostBaseProducePipeline extends ProducePipeline {
 
         long ruleRegStart = System.currentTimeMillis();
         CostBaseOptimizer optimizer = new CostBaseOptimizer();
-
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
         for (int i = 0; i < ruleContexts.size(); i++) {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);

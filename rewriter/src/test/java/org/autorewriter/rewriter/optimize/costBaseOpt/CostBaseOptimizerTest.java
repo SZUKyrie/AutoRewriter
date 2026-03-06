@@ -16,6 +16,7 @@ import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.RelBuilder;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.PostgresTableScan;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
+import org.autorewriter.rewriter.optimize.trace.RuleApplicationStep;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -180,6 +181,42 @@ public class CostBaseOptimizerTest {
         assertNotNull(result);
         assertTrue(trace.firedCount() > 0,
                 "Expected at least one rule fire in the trace");
+    }
+
+    @Test
+    public void testJoinCommuteRuleFires() {
+        // Build: customers JOIN orders ON customers.id = orders.customer_id
+        relBuilder.clear();
+        RelNode left = relBuilder.scan("customers").build();
+        relBuilder.clear();
+        RelNode right = relBuilder.scan("orders").build();
+        relBuilder.clear();
+        RelNode query = relBuilder
+                .push(left)
+                .push(right)
+                .join(JoinRelType.INNER,
+                        relBuilder.equals(
+                                relBuilder.field(2, 0, "id"),
+                                relBuilder.field(2, 1, "customer_id")))
+                .build();
+
+        CostBaseOptimizer optimizer = new CostBaseOptimizer();
+        OptimizationTrace trace = new OptimizationTrace();
+        RelNode result = optimizer.optimize(query, trace);
+
+        assertNotNull(result);
+        assertAllNodesInJdbcConvention(result);
+
+        // Verify JOIN_COMMUTE fired in the trace
+        boolean joinCommuteFired = trace.getSteps().stream()
+                .anyMatch(step -> step.getRule().getClass().getSimpleName()
+                        .contains("JoinCommuteRule"));
+
+        System.out.println(trace.summary());
+
+        assertTrue(joinCommuteFired,
+                "Expected JoinCommuteRule to fire but it did not. Trace:\n"
+                        + trace.summary());
     }
 
     /**
