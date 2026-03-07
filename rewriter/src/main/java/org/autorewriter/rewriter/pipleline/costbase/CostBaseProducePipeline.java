@@ -116,6 +116,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
                 optimizeResult.setOriginalRelNode(relNode);
             } else {
                 log.info("query {} is optimized by CBO.\n{}", historicalSqlRecord.getQueryId(), trace.pathSummary());
+                log.info("optimized plan:\n{}", optimizedRelNode.explain());
                 log.info("optimized query:\n {}", relNodeToSql(optimizedRelNode));
                 optimizeResult.setRewritten(true);
                 optimizeResult.setOptimizationTimeInMs(optimizationTimeInMs);
