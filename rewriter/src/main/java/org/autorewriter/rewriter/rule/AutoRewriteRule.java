@@ -6,13 +6,11 @@ import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelOptRuleOperand;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.LogicalProject;
-import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
-import org.apache.calcite.util.ImmutableBitSet;
 import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
 import org.autorewriter.rewriter.rule.constraint.Constraints;
 import org.autorewriter.rewriter.rule.instantiation.Instantiation;
@@ -31,7 +29,6 @@ import java.util.*;
 public class AutoRewriteRule extends RelOptRule {
 
     private final int ruleId;
-    private final boolean requireUniqueness;
     private final RelNode sourceTemplate;
     private final RelNode targetTemplate;
     private final Constraints constraints;
@@ -40,19 +37,19 @@ public class AutoRewriteRule extends RelOptRule {
     private Model lastModel;
 
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext) {
-        this(operand, ruleContext, -1, false);
+        this(operand, ruleContext, -1);
     }
 
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext, int ruleId) {
-        this(operand, ruleContext, ruleId, false);
+        this(operand, ruleContext, ruleId, "");
     }
 
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext,
-                           int ruleId, boolean requireUniqueness) {
-        super(operand, "AutoRewriteRule_" + (ruleId >= 0 ? ruleId : System.identityHashCode(ruleContext))
-                + (requireUniqueness ? "_stripped" : ""));
+                           int ruleId, String descSuffix) {
+        super(operand, "AutoRewriteRule_"
+                + (ruleId >= 0 ? ruleId : System.identityHashCode(ruleContext))
+                + descSuffix);
         this.ruleId = ruleId;
-        this.requireUniqueness = requireUniqueness;
         this.sourceTemplate = ruleContext.getSourceRelNode();
         this.targetTemplate = ruleContext.getTargetRelNode();
 
@@ -81,17 +78,6 @@ public class AutoRewriteRule extends RelOptRule {
         if (!model.checkConstraints()) {
             log.info("Rule[{}] match failed: constraints not satisfied", ruleId);
             return false;
-        }
-
-        // Stripped rules: verify data uniqueness at the point where Aggregate was elided
-        if (requireUniqueness) {
-            RelMetadataQuery mq = queryNode.getCluster().getMetadataQuery();
-            ImmutableBitSet allCols = ImmutableBitSet.range(queryNode.getRowType().getFieldCount());
-            Boolean unique = mq.areColumnsUnique(queryNode, allCols);
-            if (unique == null || !unique) {
-                log.info("Rule[{}] match failed: uniqueness check failed for stripped rule", ruleId);
-                return false;
-            }
         }
 
         log.info("Rule[{}] match succeeded", ruleId);

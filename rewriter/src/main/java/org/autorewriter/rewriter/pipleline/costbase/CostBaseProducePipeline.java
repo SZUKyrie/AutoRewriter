@@ -76,7 +76,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
                         RelOptRule.operand(strippedRootClass, RelOptRule.any()),
                         strippedContext,
                         i,
-                        true  // requireUniqueness
+                        "_stripped"
                 );
                 optimizer.addRule(strippedRule);
                 log.info("Registered stripped DISTINCT rule variant for rule[{}]", i);

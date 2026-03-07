@@ -502,7 +502,7 @@ public class CostBaseOptimizerTest {
      * elided it due to PK uniqueness.
      *
      * We manually build the query plan without .distinct() to simulate this.
-     * The stripped rule variant (with requireUniqueness) should still match.
+     * The stripped rule variant should still match.
      */
     @Test
     public void testStrippedDistinctRuleMatchesQueryWithoutAggregate() {
@@ -535,7 +535,7 @@ public class CostBaseOptimizerTest {
         AutoRewriteRule strippedRule = new AutoRewriteRule(
                 org.apache.calcite.plan.RelOptRule.operand(rootClass,
                         org.apache.calcite.plan.RelOptRule.any()),
-                strippedContext, 0, true);
+                strippedContext, 0);
 
         // Register and optimize
         CostBaseOptimizer optimizer = new CostBaseOptimizer();
