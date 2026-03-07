@@ -20,16 +20,16 @@ import java.util.List;
  * nodes, but {@code RexSubQuery.rel} inside filter conditions may still
  * reference nodes whose inputs are {@link RelSubset} wrappers (because
  * {@code findBestExp()} only follows {@code getInputs()}, not RexNode
- * expressions). Additionally, the subquery tree may contain
- * {@link LogicalInSubFilter} nodes that {@code RelToSqlConverter} does not
- * understand.
+ * expressions).
  * <p>
  * This utility:
  * <ol>
  *   <li>Replaces {@code RelSubset} with the best concrete implementation</li>
- *   <li>Converts {@code LogicalInSubFilter} back to
- *       {@code LogicalFilter(IN RexSubQuery)}</li>
+ *   <li>Resolves nested {@code RexSubQuery.rel} trees recursively</li>
  * </ol>
+ * <p>
+ * Note: {@link LogicalInSubFilter} nodes are preserved — they are handled
+ * natively by {@link InSubFilterSqlConverter} during SQL generation.
  * <p>
  * Usage: call {@code SubQueryTreeResolver.resolve(bestPlan)} after
  * {@code VolcanoPlanner.findBestExp()}.
@@ -85,10 +85,11 @@ public class SubQueryTreeResolver {
     }
 
     /**
-     * Recursively resolve a RelNode tree:
+     * Recursively resolve a RelNode tree inside RexSubQuery:
      * <ul>
      *   <li>Replace {@code RelSubset} with best concrete node</li>
-     *   <li>Replace {@code LogicalInSubFilter} with {@code LogicalFilter(IN)}</li>
+     *   <li>Replace {@code LogicalInSubFilter} with {@code LogicalFilter(IN)}
+     *       (needed because FilterMatcher expects LogicalFilter in subquery trees)</li>
      *   <li>Resolve any nested {@code RexSubQuery} in filter conditions</li>
      * </ul>
      */
@@ -124,7 +125,10 @@ public class SubQueryTreeResolver {
             node = node.copy(node.getTraitSet(), newInputs);
         }
 
-        // Convert LogicalInSubFilter → LogicalFilter(IN RexSubQuery)
+        // Convert LogicalInSubFilter → LogicalFilter(IN RexSubQuery) inside subquery trees.
+        // The main plan tree keeps LogicalInSubFilter (handled by InSubFilterSqlConverter),
+        // but subquery trees inside RexSubQuery.rel must use LogicalFilter because
+        // FilterMatcher expects it during rule matching.
         if (node instanceof LogicalInSubFilter) {
             LogicalInSubFilter inSub = (LogicalInSubFilter) node;
             RexSubQuery rexSub = RexSubQuery.in(

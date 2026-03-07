@@ -1,5 +1,6 @@
 package org.autorewriter.rewriter.optimize.costBaseOpt.postgres;
 
+import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelShuttleImpl;
 import org.apache.calcite.rel.core.Filter;
@@ -51,6 +52,11 @@ public class FilterMerger extends RelShuttleImpl {
 
     @Override
     public RelNode visit(RelNode other) {
+        // Unwrap HepRelVertex before dispatch
+        RelNode unwrapped = unwrap(other);
+        if (unwrapped != other) {
+            return unwrapped.accept(this);
+        }
         // Handle non-LogicalFilter Filter subclasses (e.g., JdbcFilter)
         if (other instanceof Filter) {
             return mergeFilterChain((Filter) other);
@@ -59,13 +65,14 @@ public class FilterMerger extends RelShuttleImpl {
     }
 
     private RelNode mergeFilterChain(Filter topFilter) {
-        // Collect all consecutive filter predicates
+        // Collect all consecutive filter predicates, unwrapping HepRelVertex
         List<RexNode> predicates = new ArrayList<>();
         RelNode current = topFilter;
 
-        while (current instanceof Filter) {
-            Filter f = (Filter) current;
-            // Process RexSubQuery inside the condition
+        while (true) {
+            RelNode unwrapped = unwrap(current);
+            if (!(unwrapped instanceof Filter)) break;
+            Filter f = (Filter) unwrapped;
             RexNode condition = f.getCondition().accept(rexShuttle);
             predicates.add(condition);
             current = f.getInput();
@@ -86,5 +93,12 @@ public class FilterMerger extends RelShuttleImpl {
         RexNode merged = RexUtil.composeConjunction(
                 topFilter.getCluster().getRexBuilder(), predicates);
         return topFilter.copy(topFilter.getTraitSet(), newInput, merged);
+    }
+
+    private static RelNode unwrap(RelNode node) {
+        while (node instanceof HepRelVertex) {
+            node = ((HepRelVertex) node).getCurrentRel();
+        }
+        return node;
     }
 }

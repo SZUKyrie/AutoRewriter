@@ -14,6 +14,7 @@ import org.autorewriter.rewriter.optimize.OptimizeResult;
 import org.autorewriter.rewriter.optimize.costBaseOpt.CostBaseOptimizer;
 import org.autorewriter.rewriter.optimize.costBaseOpt.DistinctAggregateStripper;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterSqlConverter;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.pipleline.ProduceContext;
 import org.autorewriter.rewriter.pipleline.ProducePipeline;
@@ -133,7 +134,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
     private String relNodeToSql(RelNode relNode) {
         try {
             SqlDialect dialect = AnsiSqlDialect.DEFAULT;
-            RelToSqlConverter converter = new RelToSqlConverter(dialect);
+            InSubFilterSqlConverter converter = new InSubFilterSqlConverter(dialect);
             RelToSqlConverter.Result result = converter.visitRoot(relNode);
             SqlNode sqlNode = result.asStatement();
             return sqlNode.toSqlString(dialect).getSql();

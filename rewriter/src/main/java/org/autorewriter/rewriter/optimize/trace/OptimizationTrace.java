@@ -5,6 +5,7 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
 import org.apache.calcite.sql.SqlDialect;
 import org.apache.calcite.sql.dialect.AnsiSqlDialect;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterSqlConverter;
 
 import java.io.IOException;
 import java.util.*;
@@ -175,7 +176,7 @@ public class OptimizationTrace {
     private static String tryRelNodeToSql(RelNode node) {
         try {
             SqlDialect dialect = AnsiSqlDialect.DEFAULT;
-            RelToSqlConverter converter = new RelToSqlConverter(dialect);
+            InSubFilterSqlConverter converter = new InSubFilterSqlConverter(dialect);
             RelToSqlConverter.Result result = converter.visitRoot(node);
             return result.asStatement().toSqlString(dialect).getSql();
         } catch (Throwable e) {

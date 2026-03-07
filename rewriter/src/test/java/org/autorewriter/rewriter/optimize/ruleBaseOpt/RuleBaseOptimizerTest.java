@@ -80,8 +80,8 @@ public class RuleBaseOptimizerTest {
     private String relNodeToSql(RelNode relNode) {
         try {
             org.apache.calcite.sql.SqlDialect dialect = org.apache.calcite.sql.dialect.AnsiSqlDialect.DEFAULT;
-            org.apache.calcite.rel.rel2sql.RelToSqlConverter converter =
-                new org.apache.calcite.rel.rel2sql.RelToSqlConverter(dialect);
+            org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterSqlConverter converter =
+                new org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterSqlConverter(dialect);
             org.apache.calcite.rel.rel2sql.RelToSqlConverter.Result result =
                 converter.visitRoot(relNode);
             org.apache.calcite.sql.SqlNode sqlNode = result.asStatement();
@@ -570,9 +570,11 @@ public class RuleBaseOptimizerTest {
 
             printUnifiedOutput(testName, ruleStr, query, optimized);
 
-            // Verify result is a LogicalFilter (InSubFilter maps to LogicalFilter)
-            assertTrue(optimized instanceof org.apache.calcite.rel.logical.LogicalFilter,
-                    "Expected LogicalFilter but got " + optimized.getClass().getSimpleName());
+            // Verify result is a LogicalInSubFilter (InSubFilter is preserved natively)
+            // or LogicalFilter (if the rule converted it)
+            assertTrue(optimized instanceof org.apache.calcite.rel.core.Filter
+                            || optimized instanceof org.autorewriter.rewriter.optimize.costBaseOpt.insub.LogicalInSubFilter,
+                    "Expected Filter or LogicalInSubFilter but got " + optimized.getClass().getSimpleName());
         } catch (Exception e) {
             System.out.println("Test failed: " + e.getMessage());
             e.printStackTrace();

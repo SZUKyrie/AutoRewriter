@@ -2,6 +2,7 @@ package org.autorewriter.rewriter.optimize.ruleBaseOpt;
 
 import lombok.Getter;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.hep.HepMatchOrder;
 import org.apache.calcite.plan.hep.HepPlanner;
@@ -9,6 +10,10 @@ import org.apache.calcite.plan.hep.HepProgram;
 import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
 import org.autorewriter.rewriter.optimize.BaseOptimizer;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.SubQueryTreeResolver;
+import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterMerger;
+import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.optimize.trace.RuleTraceListener;
 import org.autorewriter.rewriter.rule.AutoRewriteRule;
@@ -19,6 +24,7 @@ import java.util.List;
 /**
  * Rule-based optimizer using Calcite's HepPlanner.
  */
+@Slf4j
 @Setter
 @Getter
 public class RuleBaseOptimizer implements BaseOptimizer {
@@ -31,12 +37,12 @@ public class RuleBaseOptimizer implements BaseOptimizer {
 
     /**
      * Create a new RuleBaseOptimizer with default settings.
-     * Default match order: TOP_DOWN
+     * Default match order: BOTTOM_UP
      * Default max iterations: 10
      */
     public RuleBaseOptimizer() {
         this.rules = new ArrayList<>();
-        this.matchOrder = HepMatchOrder.TOP_DOWN;
+        this.matchOrder = HepMatchOrder.BOTTOM_UP;
         this.maxIterations = 10;
         this.plannerNeedsRebuild = true;
     }
@@ -110,11 +116,23 @@ public class RuleBaseOptimizer implements BaseOptimizer {
 
     /**
      * Optimize {@code root} and record every rule-fire into {@code trace}.
+     * Preprocessing and postprocessing aligned with CostBaseOptimizer:
+     * <ol>
+     *   <li>FilterSplitter — split AND filters for rule matching</li>
+     *   <li>InSubFilterExpander — expose IN-subqueries as two-child operators</li>
+     *   <li>HepPlanner — apply rules (BOTTOM_UP)</li>
+     *   <li>SubQueryTreeResolver — resolve RelSubset/InSubFilter in RexSubQuery trees</li>
+     *   <li>FilterMerger — merge split filters back for clean SQL</li>
+     * </ol>
      */
     public RelNode optimize(RelNode root, OptimizationTrace trace) {
         if (rules.isEmpty()) {
             return root;
         }
+
+        // Preprocess: aligned with CostBaseOptimizer
+        root = FilterSplitter.split(root);
+        root = InSubFilterExpander.expand(root);
 
         ensurePlannerBuilt();
 
@@ -123,7 +141,15 @@ public class RuleBaseOptimizer implements BaseOptimizer {
         }
 
         planner.setRoot(root);
-        return planner.findBestExp();
+        RelNode result = planner.findBestExp();
+
+        // Post-process: aligned with CostBaseOptimizer
+        result = SubQueryTreeResolver.resolve(result);
+        result = FilterMerger.merge(result);
+
+        log.info("RBO optimization completed, {} rules registered", rules.size());
+
+        return result;
     }
 
     public RuleBaseOptimizer clearRules() {

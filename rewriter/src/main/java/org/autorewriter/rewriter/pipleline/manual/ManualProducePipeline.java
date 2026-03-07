@@ -4,6 +4,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
+import org.autorewriter.rewriter.optimize.costBaseOpt.DistinctAggregateStripper;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterSqlConverter;
 import org.apache.calcite.rel.rules.JoinCommuteRule;
 import org.apache.calcite.rel.rules.ProjectMergeRule;
 import org.apache.calcite.rel.rules.SubQueryRemoveRule;
@@ -39,7 +42,7 @@ public class ManualProducePipeline extends ProducePipeline {
 
         // create rbo optimizer and register rules
         RuleBaseOptimizer optimizer = new RuleBaseOptimizer();
-        optimizer.addRule(JoinCommuteRule.Config.DEFAULT.toRule());
+        //optimizer.addRule(JoinCommuteRule.Config.DEFAULT.toRule());
         //optimizer.addRule(SubQueryRemoveRule.Config.FILTER.toRule());
         //optimizer.addRule(SubQueryRemoveRule.Config.PROJECT.toRule());
         //optimizer.addRule(SubQueryRemoveRule.Config.JOIN.toRule());
@@ -53,14 +56,37 @@ public class ManualProducePipeline extends ProducePipeline {
 
         for (int i = 0; i < ruleContexts.size(); i++) {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);
+
+            // Preprocess source template: aligned with CostBaseProducePipeline
+            RelNode sourceTemplate = InSubFilterExpander.expand(ruleContext.getSourceRelNode());
+            RuleAnalysisContext expandedContext = new RuleAnalysisContext(
+                    sourceTemplate, ruleContext.getTargetRelNode(),
+                    ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());
+
+            // Register original rule
             Class<? extends RelNode> rootClass =
-                    (Class<? extends RelNode>) ruleContext.getSourceRelNode().getClass();
+                    (Class<? extends RelNode>) expandedContext.getSourceRelNode().getClass();
             AutoRewriteRule rule = new AutoRewriteRule(
                     RelOptRule.operand(rootClass, RelOptRule.any()),
-                    ruleContext,
+                    expandedContext,
                     i
             );
             optimizer.addRule(rule);
+
+            // Register stripped DISTINCT variant (aligned with CostBaseProducePipeline)
+            if (DistinctAggregateStripper.isDistinctAggregate(sourceTemplate)) {
+                RuleAnalysisContext strippedContext =
+                        DistinctAggregateStripper.stripBoth(expandedContext);
+                Class<? extends RelNode> strippedRootClass =
+                        (Class<? extends RelNode>) strippedContext.getSourceRelNode().getClass();
+                AutoRewriteRule strippedRule = new AutoRewriteRule(
+                        RelOptRule.operand(strippedRootClass, RelOptRule.any()),
+                        strippedContext,
+                        i,
+                        "_stripped"
+                );
+                optimizer.addRule(strippedRule);
+            }
         }
         produceResult.setRuleRegistrationTimeMs(System.currentTimeMillis() - ruleRegStart);
         log.info("rule registration finished, {} rules registered in {} ms",
@@ -104,8 +130,8 @@ public class ManualProducePipeline extends ProducePipeline {
     private String relNodeToSql(RelNode relNode) {
         try {
             SqlDialect dialect = AnsiSqlDialect.DEFAULT;
-            RelToSqlConverter converter =
-                    new RelToSqlConverter(dialect);
+            InSubFilterSqlConverter converter =
+                    new InSubFilterSqlConverter(dialect);
             RelToSqlConverter.Result result =
                     converter.visitRoot(relNode);
             SqlNode sqlNode = result.asStatement();
