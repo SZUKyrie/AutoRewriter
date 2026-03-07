@@ -1,5 +1,6 @@
 package org.autorewriter.rewriter.rule.match;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.LogicalFilter;
 import org.autorewriter.rewriter.rule.model.Model;
@@ -9,36 +10,21 @@ import java.util.List;
 
 /**
  * Handles filter chain combinatorial matching.
- *
- * <p>When a template has stacked filters (e.g. {@code Filter(Filter(Input))}),
- * the query may have the same filters in a different order. This class tries
- * all permutations of assigning template filters to query filters using
- * backtracking with {@link Model#derive()}.
  */
+@Slf4j
 public class FilterMatcher {
 
-    /**
-     * Match a template filter chain against a query filter chain.
-     * Template chain: Filter(Filter(...(Input)))
-     * Query may have a different arrangement of filters.
-     */
     public static boolean matchFilterChain(LogicalFilter templateHead, LogicalFilter queryHead, Model model) {
-        // Collect template filter chain
         List<LogicalFilter> templateChain = collectFilterChain(templateHead);
-        // Collect query filter chain
         List<LogicalFilter> queryChain = collectFilterChain(queryHead);
 
-        if (templateChain.size() > queryChain.size()) return false;
-
-        // Get the bottom-most input (below all filters)
         RelNode templateBottom = getChainInput(templateHead);
         RelNode queryBottom = getChainInput(queryHead);
 
-        // Match the bottom input first
+        if (templateChain.size() > queryChain.size()) return false;
+
         if (!Match.match(templateBottom, queryBottom, model)) return false;
 
-        // Try to find an assignment of template filters to query filters
-        // Use backtracking with model.derive()
         return assignFilters(templateChain, queryChain, 0, new boolean[queryChain.size()], queryHead, model);
     }
 

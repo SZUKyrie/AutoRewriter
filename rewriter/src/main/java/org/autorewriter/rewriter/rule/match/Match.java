@@ -1,7 +1,8 @@
 package org.autorewriter.rewriter.rule.match;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.hep.HepRelVertex;
-import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.plan.volcano.RelSubset;import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.*;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rex.*;
@@ -27,6 +28,7 @@ import java.util.*;
  *   <li>{@code s\d+} in field names &rarr; SCHEMA symbol (output schema)</li>
  * </ul>
  */
+@Slf4j
 public class Match {
 
     /**
@@ -35,6 +37,23 @@ public class Match {
      */
     public static boolean match(RelNode template, RelNode query, Model model) {
         query = unwrapHepVertex(query);
+
+        // Handle VolcanoPlanner's RelSubset: try matching against each alternative
+        // in the equivalence set. A RelSubset may contain multiple equivalent nodes
+        // (e.g., LogicalInSubFilter AND LogicalFilter(IN)), and we need to find one
+        // that structurally matches the template.
+        if (query instanceof RelSubset) {
+            RelSubset subset = (RelSubset) query;
+            for (RelNode rel : subset.getRels()) {
+                if (rel instanceof RelSubset) continue;
+                Model derived = model.derive();
+                if (match(template, rel, derived)) {
+                    // Found a matching alternative — replay into the real model
+                    return match(template, rel, model);
+                }
+            }
+            return false;
+        }
 
         // 1. If template is a LogicalTableScan with placeholder name (t\d+) = INPUT
         //    It can match ANY query RelNode subtree (wildcard)
@@ -176,16 +195,19 @@ public class Match {
 
     private static boolean matchFilter(LogicalFilter template, LogicalFilter query, Model model) {
         RexNode templateCond = template.getCondition();
-        RexNode queryCond = query.getCondition();
 
         // Check if this is an InSubFilter (template condition contains RexSubQuery)
         if (hasRexSubQuery(templateCond)) {
             return matchInSubFilter(template, query, model);
         }
 
-        // Check if template's input is also a filter (filter chain)
+        // Use filter chain matching when EITHER the template OR the query has
+        // multiple consecutive filters. This handles the common case where
+        // FilterSplitter produces a chain of filters (e.g., Filter → Filter →
+        // Filter → Join) but the template has only a single filter.
         RelNode templateInput = unwrapHepVertex(template.getInput());
-        if (templateInput instanceof LogicalFilter) {
+        RelNode queryInput = unwrapHepVertex(query.getInput());
+        if (templateInput instanceof LogicalFilter || queryInput instanceof LogicalFilter) {
             return FilterMatcher.matchFilterChain(template, query, model);
         }
 
@@ -194,7 +216,7 @@ public class Match {
         if (!match(template.getInput(), query.getInput(), model)) return false;
 
         // Match the filter condition
-        if (!matchRexNode(templateCond, queryCond, query, model)) return false;
+        if (!matchRexNode(templateCond, query.getCondition(), query, model)) return false;
 
         return model.checkConstraints();
     }
@@ -421,11 +443,22 @@ public class Match {
     // ── Utility methods ───────────────────────────────────────────────────
 
     /**
-     * Unwrap HepRelVertex to get the real underlying RelNode.
+     * Unwrap planner-internal wrappers to get the real underlying RelNode.
+     * Handles HepPlanner's HepRelVertex. For VolcanoPlanner's RelSubset,
+     * see the handling in {@link #match} which iterates alternatives.
      */
     public static RelNode unwrapHepVertex(RelNode node) {
         while (node instanceof HepRelVertex) {
             node = ((HepRelVertex) node).getCurrentRel();
+        }
+        // For RelSubset, return the original logical node as a best-effort
+        // default. Match.match() handles full iteration when needed.
+        if (node instanceof RelSubset) {
+            RelSubset subset = (RelSubset) node;
+            RelNode original = subset.getOriginal();
+            if (original != null) {
+                return original;
+            }
         }
         return node;
     }
