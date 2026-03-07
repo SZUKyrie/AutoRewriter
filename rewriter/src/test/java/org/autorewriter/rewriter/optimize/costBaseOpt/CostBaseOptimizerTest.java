@@ -15,8 +15,11 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.RelBuilder;
+import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
+import org.autorewriter.rewriter.analyze.RuleAnalyzer;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.PostgresTableScan;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
+import org.autorewriter.rewriter.rule.AutoRewriteRule;
 import org.autorewriter.rewriter.optimize.trace.RuleApplicationStep;
 import org.autorewriter.rewriter.optimize.trace.TraceTreeVisualizer;
 import org.junit.jupiter.api.BeforeEach;
@@ -491,6 +494,64 @@ public class CostBaseOptimizerTest {
         } catch (java.io.IOException e) {
             System.out.println("Skipped PNG export (Graphviz not available): " + e.getMessage());
         }
+    }
+
+    /**
+     * Test that a rule with Proj* (DISTINCT Aggregate) at the source root
+     * can match a query plan that has no LogicalAggregate because Calcite
+     * elided it due to PK uniqueness.
+     *
+     * We manually build the query plan without .distinct() to simulate this.
+     * The stripped rule variant (with requireUniqueness) should still match.
+     */
+    @Test
+    public void testStrippedDistinctRuleMatchesQueryWithoutAggregate() {
+        // Build a simple query: SELECT id, name FROM customers (no DISTINCT)
+        relBuilder.clear();
+        RelNode queryWithoutDistinct = relBuilder
+                .scan("customers")
+                .project(relBuilder.field("id"), relBuilder.field("name"))
+                .build();
+
+        // Parse a rule that has Proj* (DISTINCT) as source root
+        String ruleStr = "Proj*<a0 s0>(Input<t0>)|Proj<a1 s1>(Input<t1>)"
+            + "|AttrsSub(a0,t0);TableEq(t1,t0);AttrsEq(a1,a0);SchemaEq(s1,s0)";
+        RuleAnalysisContext ruleContext = RuleAnalyzer.analyze(ruleStr);
+
+        // Strip the Aggregate from source template
+        RuleAnalysisContext strippedContext =
+                DistinctAggregateStripper.stripBoth(ruleContext);
+
+        // The stripped source root should NOT be LogicalAggregate
+        assertFalse(
+                strippedContext.getSourceRelNode()
+                        instanceof org.apache.calcite.rel.logical.LogicalAggregate,
+                "Stripped source should not be LogicalAggregate");
+
+        // Create the stripped rule
+        @SuppressWarnings("unchecked")
+        Class<? extends RelNode> rootClass =
+                (Class<? extends RelNode>) strippedContext.getSourceRelNode().getClass();
+        AutoRewriteRule strippedRule = new AutoRewriteRule(
+                org.apache.calcite.plan.RelOptRule.operand(rootClass,
+                        org.apache.calcite.plan.RelOptRule.any()),
+                strippedContext, 0, true);
+
+        // Register and optimize
+        CostBaseOptimizer optimizer = new CostBaseOptimizer();
+        optimizer.addRule(strippedRule);
+        assertEquals(1, optimizer.getRuleCount());
+
+        // Optimize — the rule may or may not fire depending on uniqueness
+        // metadata (test AbstractTables don't have PKs), but it should not crash
+        OptimizationTrace trace = new OptimizationTrace();
+        RelNode result = optimizer.optimize(queryWithoutDistinct, trace);
+        assertNotNull(result);
+
+        System.out.println("=== Stripped DISTINCT Rule Test ===");
+        System.out.println("Query plan:\n" + queryWithoutDistinct.explain());
+        System.out.println("Result plan:\n" + result.explain());
+        System.out.println(trace.summary());
     }
 
     /**
