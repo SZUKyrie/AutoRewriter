@@ -26,6 +26,7 @@ import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterToFilterRule;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.JdbcInSubFilterRule;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.SubQueryTreeResolver;
+import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterMerger;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.PostgresTableScanRule;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
@@ -168,6 +169,12 @@ public class CostBaseOptimizer implements BaseOptimizer {
         // may still contain RelSubset wrappers and LogicalInSubFilter nodes
         // that RelToSqlConverter cannot handle.
         bestPlan = SubQueryTreeResolver.resolve(bestPlan);
+
+        // Post-process: merge consecutive Filter nodes back into single AND-conjoined
+        // filters. FilterSplitter splits them before optimization for rule matching;
+        // FilterMerger reverses this to prevent RelToSqlConverter from generating
+        // nested subqueries for each individual predicate.
+        bestPlan = FilterMerger.merge(bestPlan);
 
         log.info("CBO optimization completed, {} user rules + JDBC conversion rules registered",
                 rules.size());
