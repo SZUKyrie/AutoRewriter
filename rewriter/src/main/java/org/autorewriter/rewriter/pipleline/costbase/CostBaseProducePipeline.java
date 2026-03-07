@@ -12,6 +12,7 @@ import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
 import org.autorewriter.rewriter.historical.HistoricalSqlRecord;
 import org.autorewriter.rewriter.optimize.OptimizeResult;
 import org.autorewriter.rewriter.optimize.costBaseOpt.CostBaseOptimizer;
+import org.autorewriter.rewriter.optimize.costBaseOpt.DistinctAggregateStripper;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.pipleline.ProduceContext;
@@ -52,6 +53,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
                     sourceTemplate, ruleContext.getTargetRelNode(),
                     ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());
 
+            // Register original rule
             Class<? extends RelNode> rootClass =
                     (Class<? extends RelNode>) expandedContext.getSourceRelNode().getClass();
             AutoRewriteRule rule = new AutoRewriteRule(
@@ -60,6 +62,25 @@ public class CostBaseProducePipeline extends ProducePipeline {
                     i
             );
             optimizer.addRule(rule);
+
+            // Register stripped version if source root is DISTINCT Aggregate.
+            // This handles queries where Calcite elided LogicalAggregate because
+            // the table's PK already guarantees uniqueness (RelBuilder.distinct()
+            // checks areColumnsUnique and skips Aggregate creation).
+            if (DistinctAggregateStripper.isDistinctAggregate(sourceTemplate)) {
+                RuleAnalysisContext strippedContext =
+                        DistinctAggregateStripper.stripBoth(expandedContext);
+                Class<? extends RelNode> strippedRootClass =
+                        (Class<? extends RelNode>) strippedContext.getSourceRelNode().getClass();
+                AutoRewriteRule strippedRule = new AutoRewriteRule(
+                        RelOptRule.operand(strippedRootClass, RelOptRule.any()),
+                        strippedContext,
+                        i,
+                        true  // requireUniqueness
+                );
+                optimizer.addRule(strippedRule);
+                log.info("Registered stripped DISTINCT rule variant for rule[{}]", i);
+            }
         }
 
         produceResult.setRuleRegistrationTimeMs(System.currentTimeMillis() - ruleRegStart);
