@@ -4,8 +4,10 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.*;
 import org.apache.calcite.rel.type.*;
 import org.apache.calcite.rex.*;
+import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.util.ImmutableBitSet;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.LogicalInSubFilter;
 import org.autorewriter.rewriter.rule.constraint.Constraints;
 import org.autorewriter.rewriter.rule.match.Match;
 import org.autorewriter.rewriter.rule.model.Model;
@@ -242,6 +244,24 @@ public class Instantiation {
             condition = template.getCondition();
         }
 
+        // If the condition is an IN RexSubQuery, produce LogicalInSubFilter
+        // instead of LogicalFilter(IN RexSubQuery). This keeps the plan consistent
+        // with the InSubFilterExpander preprocessing — otherwise subsequent rules
+        // expecting LogicalInSubFilter cannot match the rewritten plan.
+        RexSubQuery inSub = findInSubQuery(condition);
+        if (inSub != null) {
+            RexNode lhsRef = inSub.getOperands().get(0);
+            LogicalInSubFilter inSubFilter = LogicalInSubFilter.create(child, inSub.rel, lhsRef);
+            // If there are remaining conditions (AND with other predicates), wrap in Filter
+            List<RexNode> remaining = removeSubQuery(condition, inSub);
+            if (!remaining.isEmpty()) {
+                RexNode remainingCond = RexUtil.composeConjunction(
+                        child.getCluster().getRexBuilder(), remaining);
+                return LogicalFilter.create(inSubFilter, remainingCond);
+            }
+            return inSubFilter;
+        }
+
         return LogicalFilter.create(child, condition);
     }
 
@@ -457,6 +477,12 @@ public class Instantiation {
             }
             return expr;
         }
+        // Skip RexSubQuery: its operands reference the subquery's own context
+        // (the filter's LHS), not the plan structure being transformed.
+        // Rebinding them would produce wrong column indices.
+        if (expr instanceof RexSubQuery) {
+            return expr;
+        }
         if (expr instanceof RexCall) {
             RexCall call = (RexCall) expr;
             List<RexNode> newOperands = new ArrayList<>();
@@ -506,6 +532,34 @@ public class Instantiation {
             }
         }
         return false;
+    }
+
+    /** Find the first IN RexSubQuery in a condition (may be nested in AND). */
+    private static RexSubQuery findInSubQuery(RexNode condition) {
+        if (condition instanceof RexSubQuery) {
+            RexSubQuery sub = (RexSubQuery) condition;
+            if (sub.getKind() == SqlKind.IN) return sub;
+        }
+        if (condition instanceof RexCall) {
+            for (RexNode operand : ((RexCall) condition).getOperands()) {
+                RexSubQuery found = findInSubQuery(operand);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    /** Remove a specific RexSubQuery from a conjunction, returning remaining terms. */
+    private static List<RexNode> removeSubQuery(RexNode condition, RexSubQuery target) {
+        List<RexNode> conjunctions = RexUtil.flattenAnd(
+                Collections.singletonList(condition));
+        List<RexNode> remaining = new ArrayList<>();
+        for (RexNode conj : conjunctions) {
+            if (conj != target) {
+                remaining.add(conj);
+            }
+        }
+        return remaining;
     }
 
     private static List<int[]> extractJoinKeyPairs(RexNode condition, int leftFieldCount) {

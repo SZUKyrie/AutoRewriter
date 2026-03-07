@@ -10,6 +10,7 @@ import org.apache.calcite.plan.hep.HepProgram;
 import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
 import org.autorewriter.rewriter.optimize.BaseOptimizer;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.FilterToInSubFilterRule;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.SubQueryTreeResolver;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterMerger;
@@ -97,7 +98,12 @@ public class RuleBaseOptimizer implements BaseOptimizer {
         HepProgramBuilder programBuilder = new HepProgramBuilder();
         programBuilder.addMatchOrder(matchOrder);
 
-        // Add all rules to the program
+        // FilterToInSubFilterRule: when Instantiation produces LogicalFilter(IN RexSubQuery)
+        // as a rule target, this rule converts it to LogicalInSubFilter so that subsequent
+        // rules can match it. Mirrors CBO where this rule is registered in VolcanoPlanner.
+        programBuilder.addRuleInstance(FilterToInSubFilterRule.INSTANCE);
+
+        // Add all user rules to the program
         for (RelOptRule rule : rules) {
             programBuilder.addRuleInstance(rule);
         }

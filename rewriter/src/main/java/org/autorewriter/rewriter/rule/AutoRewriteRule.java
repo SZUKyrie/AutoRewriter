@@ -60,7 +60,6 @@ public class AutoRewriteRule extends RelOptRule {
 
     @Override
     public boolean matches(RelOptRuleCall call) {
-        log.debug("Trying to match rule[{}] on node: {}", ruleId, call.rel(0).getClass().getSimpleName());
         RelNode queryNode = call.rel(0);
 
         // Create a fresh Model for this match attempt
