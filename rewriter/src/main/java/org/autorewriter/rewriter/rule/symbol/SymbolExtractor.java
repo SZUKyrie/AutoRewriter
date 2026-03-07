@@ -93,21 +93,23 @@ public final class SymbolExtractor {
     }
 
     private static void extractFromFilter(LogicalFilter filter, Map<String, Symbol> symbols) {
-        // Check output field names for a\d+ placeholders
-        for (String fieldName : filter.getRowType().getFieldNames()) {
-            tryAdd(fieldName, symbols);
-        }
-        // Walk condition for p\d+ and a\d+ placeholders
+        // Walk condition for p\d+ and a\d+ placeholders in operator names
         walkRexNode(filter.getCondition(), symbols);
+        // Extract field names only for columns actually referenced by the condition.
+        // Do NOT extract all row type field names — Filter inherits its row type from
+        // the child, which may be a virtual template table with placeholder column names
+        // (a0-a9) that would collide with real target-side symbols.
+        extractReferencedFieldNames(filter.getCondition(),
+                filter.getRowType().getFieldNames(), symbols);
     }
 
     private static void extractFromJoin(LogicalJoin join, Map<String, Symbol> symbols) {
-        // Check output field names for a\d+ placeholders
-        for (String fieldName : join.getRowType().getFieldNames()) {
-            tryAdd(fieldName, symbols);
-        }
-        // Walk join condition for p\d+ and a\d+ placeholders
+        // Walk join condition for p\d+ and a\d+ placeholders in operator names
         walkRexNode(join.getCondition(), symbols);
+        // Extract field names only for columns referenced in the join condition.
+        // Same reason as Filter: don't extract all row type field names.
+        extractReferencedFieldNames(join.getCondition(),
+                join.getRowType().getFieldNames(), symbols);
     }
 
     private static void extractFromAggregate(LogicalAggregate agg, Map<String, Symbol> symbols) {
@@ -141,6 +143,29 @@ public final class SymbolExtractor {
     }
 
     // ── Helper ──────────────────────────────────────────────────────────
+
+    /**
+     * Extract field names only for columns actually referenced by RexInputRef
+     * nodes in the given expression. This avoids extracting ALL row type field
+     * names (which would include virtual table placeholder columns like a0-a9).
+     */
+    private static void extractReferencedFieldNames(RexNode expr, List<String> fieldNames,
+                                                     Map<String, Symbol> symbols) {
+        if (expr instanceof RexInputRef) {
+            int idx = ((RexInputRef) expr).getIndex();
+            if (idx < fieldNames.size()) {
+                tryAdd(fieldNames.get(idx), symbols);
+            }
+        } else if (expr instanceof RexCall) {
+            for (RexNode operand : ((RexCall) expr).getOperands()) {
+                extractReferencedFieldNames(operand, fieldNames, symbols);
+            }
+        } else if (expr instanceof RexSubQuery) {
+            for (RexNode operand : ((RexSubQuery) expr).getOperands()) {
+                extractReferencedFieldNames(operand, fieldNames, symbols);
+            }
+        }
+    }
 
     private static void tryAdd(String name, Map<String, Symbol> symbols) {
         if (SymbolKind.isSymbolName(name)) {

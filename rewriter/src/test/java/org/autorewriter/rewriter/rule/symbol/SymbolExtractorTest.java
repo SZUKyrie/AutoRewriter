@@ -132,9 +132,10 @@ class SymbolExtractorTest {
 
         // t0 from the scan
         assertTrue(symbols.containsKey("t0"));
-        // a0, a1 from the filter's output row type (inherited from t0)
+        // a0 from the filter condition (references field a0)
         assertTrue(symbols.containsKey("a0"));
-        assertTrue(symbols.containsKey("a1"));
+        // a1 is NOT extracted — it's a virtual table column not referenced by the condition
+        assertFalse(symbols.containsKey("a1"));
     }
 
     // ── LogicalJoin ─────────────────────────────────────────────────────
@@ -159,11 +160,12 @@ class SymbolExtractorTest {
         // Both table placeholders
         assertTrue(symbols.containsKey("t0"));
         assertTrue(symbols.containsKey("t1"));
-        // Attr placeholders from the join's combined output schema
+        // Only a0 and a2 are extracted — they are referenced in the join condition
         assertTrue(symbols.containsKey("a0"));
-        assertTrue(symbols.containsKey("a1"));
         assertTrue(symbols.containsKey("a2"));
-        assertTrue(symbols.containsKey("a3"));
+        // a1, a3 are virtual table columns NOT referenced in the join condition
+        assertFalse(symbols.containsKey("a1"));
+        assertFalse(symbols.containsKey("a3"));
     }
 
     // ── Nested tree ─────────────────────────────────────────────────────
@@ -195,10 +197,12 @@ class SymbolExtractorTest {
         assertTrue(symbols.containsKey("t0"), "Should find t0 from scan");
         assertEquals(SymbolKind.TABLE, symbols.get("t0").kind());
 
-        // a0, a1 from output fields
-        assertTrue(symbols.containsKey("a0"), "Should find a0 from field names");
-        assertTrue(symbols.containsKey("a1"), "Should find a1 from field names");
+        // a0 from Project output fields (Project explicitly declares field names)
+        // and also from Filter condition (which references a0)
+        assertTrue(symbols.containsKey("a0"), "Should find a0 from Project/Filter field names");
         assertEquals(SymbolKind.ATTRS, symbols.get("a0").kind());
+        // Note: a1 may be renamed by Calcite's field uniqueification (e.g., to a10)
+        // so we don't assert its exact name here
     }
 
     // ── Empty/no placeholders ───────────────────────────────────────────

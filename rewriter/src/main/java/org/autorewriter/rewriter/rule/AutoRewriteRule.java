@@ -33,9 +33,6 @@ public class AutoRewriteRule extends RelOptRule {
     private final RelNode targetTemplate;
     private final Constraints constraints;
 
-    // Model is created fresh per match attempt
-    private Model lastModel;
-
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext) {
         this(operand, ruleContext, -1);
     }
@@ -81,7 +78,6 @@ public class AutoRewriteRule extends RelOptRule {
         }
 
         log.info("Rule[{}] match succeeded", ruleId);
-        this.lastModel = model;
         return true;
     }
 
@@ -90,7 +86,22 @@ public class AutoRewriteRule extends RelOptRule {
         log.debug("Rule[{}] matched, applying rewrite", ruleId);
 
         try {
-            RelNode rewrittenNode = Instantiation.instantiate(targetTemplate, lastModel, constraints);
+            RelNode queryNode = call.rel(0);
+
+            // Re-run matching to get a fresh Model bound to THIS specific node.
+            // Cannot rely on lastModel because VolcanoPlanner may call matches()
+            // on multiple nodes before calling onMatch(), making lastModel stale.
+            Model model = new Model(constraints);
+            if (!Match.match(sourceTemplate, queryNode, model)) {
+                log.warn("Rule[{}] onMatch re-match failed unexpectedly", ruleId);
+                return;
+            }
+            if (!model.checkConstraints()) {
+                log.warn("Rule[{}] onMatch re-match constraints failed", ruleId);
+                return;
+            }
+
+            RelNode rewrittenNode = Instantiation.instantiate(targetTemplate, model, constraints);
 
             RelNode originalNode = call.rel(0);
             RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
@@ -106,7 +117,7 @@ public class AutoRewriteRule extends RelOptRule {
 
             call.transformTo(adjustedNode);
         } catch (Exception e) {
-            log.warn("Rule[{}] rewrite failed: {}", ruleId, e.getMessage());
+            log.warn("Rule[{}] rewrite failed: {}", ruleId, e.getMessage(), e);
         }
     }
 
