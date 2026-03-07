@@ -41,7 +41,7 @@ public class AutoRewriteRule extends RelOptRule {
     }
 
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext, int ruleId) {
-        super(operand);
+        super(operand, "AutoRewriteRule_" + (ruleId >= 0 ? ruleId : System.identityHashCode(ruleContext)));
         this.ruleId = ruleId;
         this.sourceTemplate = ruleContext.getSourceRelNode();
         this.targetTemplate = ruleContext.getTargetRelNode();
