@@ -12,6 +12,7 @@ import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
 import org.autorewriter.rewriter.historical.HistoricalSqlRecord;
 import org.autorewriter.rewriter.optimize.OptimizeResult;
 import org.autorewriter.rewriter.optimize.costBaseOpt.CostBaseOptimizer;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.pipleline.ProduceContext;
 import org.autorewriter.rewriter.pipleline.ProducePipeline;
@@ -42,11 +43,20 @@ public class CostBaseProducePipeline extends ProducePipeline {
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
         for (int i = 0; i < ruleContexts.size(); i++) {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);
+
+            // Preprocess the source template: convert Filter(IN subquery) to
+            // LogicalInSubFilter so it matches the query plan structure after
+            // InSubFilterExpander preprocessing in CostBaseOptimizer.
+            RelNode sourceTemplate = InSubFilterExpander.expand(ruleContext.getSourceRelNode());
+            RuleAnalysisContext expandedContext = new RuleAnalysisContext(
+                    sourceTemplate, ruleContext.getTargetRelNode(),
+                    ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());
+
             Class<? extends RelNode> rootClass =
-                    (Class<? extends RelNode>) ruleContext.getSourceRelNode().getClass();
+                    (Class<? extends RelNode>) expandedContext.getSourceRelNode().getClass();
             AutoRewriteRule rule = new AutoRewriteRule(
                     RelOptRule.operand(rootClass, RelOptRule.any()),
-                    ruleContext,
+                    expandedContext,
                     i
             );
             optimizer.addRule(rule);
