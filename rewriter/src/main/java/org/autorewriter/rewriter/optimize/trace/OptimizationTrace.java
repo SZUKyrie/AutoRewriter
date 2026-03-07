@@ -2,6 +2,9 @@ package org.autorewriter.rewriter.optimize.trace;
 
 import lombok.Getter;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
+import org.apache.calcite.sql.SqlDialect;
+import org.apache.calcite.sql.dialect.AnsiSqlDialect;
 
 import java.io.IOException;
 import java.util.*;
@@ -134,6 +137,17 @@ public class OptimizationTrace {
                         .append("] ").append(describeNode(step.getProducedRelNode()))
                         .append("\n");
             }
+            // Print the final node's plan tree
+            RelNode finalNode = path.get(path.size() - 1).getProducedRelNode();
+            sb.append("  [Plan]\n");
+            for (String line : finalNode.explain().split("\n")) {
+                sb.append("    ").append(line).append("\n");
+            }
+            // Try to generate SQL (best-effort, may fail for subtrees)
+            String sql = tryRelNodeToSql(finalNode);
+            if (sql != null) {
+                sb.append("  [SQL] ").append(sql).append("\n");
+            }
         }
 
         return sb.toString();
@@ -156,6 +170,18 @@ public class OptimizationTrace {
             }
         }
         currentPath.remove(currentPath.size() - 1);
+    }
+
+    private static String tryRelNodeToSql(RelNode node) {
+        try {
+            SqlDialect dialect = AnsiSqlDialect.DEFAULT;
+            RelToSqlConverter converter = new RelToSqlConverter(dialect);
+            RelToSqlConverter.Result result = converter.visitRoot(node);
+            return result.asStatement().toSqlString(dialect).getSql();
+        } catch (Throwable e) {
+            // May fail for subtrees, physical nodes (JdbcToEnumerableConverter), etc.
+            return null;
+        }
     }
 
     private static String describeNode(RelNode node) {
