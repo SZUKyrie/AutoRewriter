@@ -385,8 +385,13 @@ public class Match {
                 Symbol predSym = Symbol.of(opName);
                 if (!model.assign(predSym, query)) return false;
 
-                // Collect all column refs from the query predicate and bind attrs
+                // Store the source context so Instantiation can rebind RexInputRef
+                // indices when the predicate is placed in a different structural context
+                // (e.g., from Filter(t1) to Filter(InnerJoin(t0, t1)))
                 RelNode resolveTarget = getFilterInput(queryOperator);
+                model.putExtra(predSym.name() + "_context", resolveTarget);
+
+                // Collect all column refs from the query predicate and bind attrs
                 List<ColumnRef> columnRefs = collectColumnRefs(query, resolveTarget);
 
                 // Find the attrs placeholder associated with this predicate

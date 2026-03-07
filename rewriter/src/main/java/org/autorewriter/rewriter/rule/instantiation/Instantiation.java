@@ -388,6 +388,15 @@ public class Instantiation {
                 Symbol sourceSym = constraints.instantiationOf(targetSym);
                 RexNode bound = sourceSym != null ? model.ofPred(sourceSym) : model.ofPred(targetSym);
                 if (bound != null) {
+                    // Rebind RexInputRef indices: the predicate was captured from a
+                    // source context (e.g., Filter over t1) but may now be placed in a
+                    // different context (e.g., Filter over InnerJoin(t0, t1)) where
+                    // column positions have changed.
+                    String predName = (sourceSym != null ? sourceSym : targetSym).name();
+                    RelNode sourceContext = (RelNode) model.ofExtra(predName + "_context");
+                    if (sourceContext != null && context != null) {
+                        return rebindPredicateRefs(bound, sourceContext, context);
+                    }
                     return bound;
                 }
             }
@@ -425,6 +434,41 @@ public class Instantiation {
         }
 
         return template;
+    }
+
+    /**
+     * Rebind all RexInputRef nodes in a predicate from old column indices
+     * (relative to sourceCtx) to new indices (relative to targetCtx).
+     * Uses ColumnRefResolver to map: oldIndex → ColumnRef → newIndex.
+     *
+     * This is needed when a predicate captured from one context (e.g., Filter
+     * over t1) is placed in a different context (e.g., Filter over Join(t0, t1))
+     * where column positions have shifted.
+     */
+    private static RexNode rebindPredicateRefs(RexNode expr, RelNode sourceCtx, RelNode targetCtx) {
+        if (expr instanceof RexInputRef) {
+            int oldIdx = ((RexInputRef) expr).getIndex();
+            ColumnRef ref = ColumnRefResolver.resolve(oldIdx, sourceCtx);
+            int newIdx = ColumnRefResolver.resolveIndex(ref, targetCtx);
+            if (newIdx >= 0) {
+                RexBuilder rexBuilder = targetCtx.getCluster().getRexBuilder();
+                RelDataType newType = targetCtx.getRowType().getFieldList().get(newIdx).getType();
+                return rexBuilder.makeInputRef(newType, newIdx);
+            }
+            return expr;
+        }
+        if (expr instanceof RexCall) {
+            RexCall call = (RexCall) expr;
+            List<RexNode> newOperands = new ArrayList<>();
+            boolean changed = false;
+            for (RexNode operand : call.getOperands()) {
+                RexNode rebound = rebindPredicateRefs(operand, sourceCtx, targetCtx);
+                newOperands.add(rebound);
+                if (rebound != operand) changed = true;
+            }
+            return changed ? call.clone(call.getType(), newOperands) : call;
+        }
+        return expr;
     }
 
     // Rebind a single stored projection RexNode to a new child
