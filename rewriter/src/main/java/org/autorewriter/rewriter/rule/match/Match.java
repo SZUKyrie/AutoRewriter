@@ -2,10 +2,12 @@ package org.autorewriter.rewriter.rule.match;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.hep.HepRelVertex;
-import org.apache.calcite.plan.volcano.RelSubset;import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.plan.volcano.RelSubset;
+import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.*;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rex.*;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.LogicalInSubFilter;
 import org.autorewriter.rewriter.rule.model.Model;
 import org.autorewriter.rewriter.rule.symbol.*;
 import org.autorewriter.rewriter.rule.util.ColumnRef;
@@ -81,10 +83,17 @@ public class Match {
             return matchProject((LogicalProject) template, (LogicalProject) query, model);
         }
 
-        // 4. LogicalFilter
+        // 4. LogicalFilter (also handles LogicalInSubFilter as part of filter chain)
         if (template instanceof LogicalFilter) {
-            if (!(query instanceof LogicalFilter)) return false;
-            return matchFilter((LogicalFilter) template, (LogicalFilter) query, model);
+            if (query instanceof LogicalFilter) {
+                return matchFilter((LogicalFilter) template, (LogicalFilter) query, model);
+            }
+            if (query instanceof LogicalInSubFilter) {
+                // InSubFilter is part of the filter chain — use chain matching
+                return FilterMatcher.matchFilterChainFromInSub(
+                        (LogicalFilter) template, (LogicalInSubFilter) query, model);
+            }
+            return false;
         }
 
         // 5. LogicalJoin
@@ -202,12 +211,11 @@ public class Match {
         }
 
         // Use filter chain matching when EITHER the template OR the query has
-        // multiple consecutive filters. This handles the common case where
-        // FilterSplitter produces a chain of filters (e.g., Filter → Filter →
-        // Filter → Join) but the template has only a single filter.
+        // multiple consecutive filter-like nodes (LogicalFilter or LogicalInSubFilter).
         RelNode templateInput = unwrapHepVertex(template.getInput());
         RelNode queryInput = unwrapHepVertex(query.getInput());
-        if (templateInput instanceof LogicalFilter || queryInput instanceof LogicalFilter) {
+        if (templateInput instanceof LogicalFilter || templateInput instanceof LogicalInSubFilter
+                || queryInput instanceof LogicalFilter || queryInput instanceof LogicalInSubFilter) {
             return FilterMatcher.matchFilterChain(template, query, model);
         }
 
