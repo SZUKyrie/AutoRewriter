@@ -4,9 +4,7 @@ import lombok.Getter;
 import org.apache.calcite.rel.RelNode;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 /**
  * Holds the complete optimization trace for a single query.
@@ -65,6 +63,122 @@ public class OptimizationTrace {
             sb.append("  ").append(step).append("\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * Human-readable path-based summary for CBO traces.
+     * <p>
+     * Reconstructs optimization paths by chaining steps where one step's
+     * producedRelNode is another step's matchedRelNode (by Calcite node ID).
+     * Each path shows: initial node → [rule1] node → [rule2] node → ...
+     * <pre>
+     * === Optimization Paths (373 rule firings, 45 paths) ===
+     *
+     * --- Path 1 (3 steps) ---
+     * LogicalJoin[inner]
+     *   -> [AutoRewriteRule_0_stripped] LogicalProject
+     *   -> [JdbcProjectRule] JdbcProject
+     * </pre>
+     */
+    public String pathSummary() {
+        if (steps.isEmpty()) {
+            return "Optimization Trace (0 rules fired, no paths)";
+        }
+
+        // Build adjacency: producedNodeId -> list of steps that consumed it
+        // (i.e., steps whose matchedRelNode has the same ID)
+        Map<Integer, List<RuleApplicationStep>> producerToConsumers = new LinkedHashMap<>();
+        Set<Integer> allMatchedIds = new HashSet<>();
+        Set<Integer> allProducedIds = new HashSet<>();
+
+        for (RuleApplicationStep step : steps) {
+            int matchedId = step.getMatchedRelNode().getId();
+            allMatchedIds.add(matchedId);
+            allProducedIds.add(step.getProducedRelNode().getId());
+            producerToConsumers
+                    .computeIfAbsent(matchedId, k -> new ArrayList<>())
+                    .add(step);
+        }
+
+        // Root steps: matchedRelNode was not produced by any prior step
+        List<RuleApplicationStep> rootSteps = new ArrayList<>();
+        for (RuleApplicationStep step : steps) {
+            int matchedId = step.getMatchedRelNode().getId();
+            if (!allProducedIds.contains(matchedId)) {
+                rootSteps.add(step);
+            }
+        }
+
+        // DFS to collect all paths from each root
+        List<List<RuleApplicationStep>> allPaths = new ArrayList<>();
+        for (RuleApplicationStep root : rootSteps) {
+            List<RuleApplicationStep> currentPath = new ArrayList<>();
+            collectPaths(root, producerToConsumers, currentPath, allPaths);
+        }
+
+        // Format output
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== Optimization Paths (")
+                .append(steps.size()).append(" rule firings, ")
+                .append(allPaths.size()).append(" paths) ===\n");
+
+        for (int i = 0; i < allPaths.size(); i++) {
+            List<RuleApplicationStep> path = allPaths.get(i);
+            sb.append("\n--- Path ").append(i + 1)
+                    .append(" (").append(path.size()).append(" steps) ---\n");
+            // Print the starting node
+            sb.append(describeNode(path.get(0).getMatchedRelNode())).append("\n");
+            // Print each step
+            for (RuleApplicationStep step : path) {
+                sb.append("  -> [").append(step.getRule().getClass().getSimpleName())
+                        .append("] ").append(describeNode(step.getProducedRelNode()))
+                        .append("\n");
+            }
+        }
+
+        return sb.toString();
+    }
+
+    private void collectPaths(RuleApplicationStep current,
+                              Map<Integer, List<RuleApplicationStep>> producerToConsumers,
+                              List<RuleApplicationStep> currentPath,
+                              List<List<RuleApplicationStep>> allPaths) {
+        currentPath.add(current);
+        int producedId = current.getProducedRelNode().getId();
+        List<RuleApplicationStep> consumers = producerToConsumers.get(producedId);
+
+        if (consumers == null || consumers.isEmpty()) {
+            // Leaf — this is a complete path
+            allPaths.add(new ArrayList<>(currentPath));
+        } else {
+            for (RuleApplicationStep next : consumers) {
+                collectPaths(next, producerToConsumers, currentPath, allPaths);
+            }
+        }
+        currentPath.remove(currentPath.size() - 1);
+    }
+
+    private static String describeNode(RelNode node) {
+        String typeName = node.getRelTypeName();
+        // Add a brief description based on node type
+        String detail = "";
+        try {
+            if (node instanceof org.apache.calcite.rel.logical.LogicalTableScan) {
+                List<String> names = node.getTable().getQualifiedName();
+                detail = "[" + names.get(names.size() - 1) + "]";
+            } else if (node instanceof org.apache.calcite.rel.logical.LogicalFilter) {
+                detail = "[" + ((org.apache.calcite.rel.logical.LogicalFilter) node)
+                        .getCondition().toString() + "]";
+                if (detail.length() > 50) detail = detail.substring(0, 47) + "...]";
+            } else if (node instanceof org.apache.calcite.rel.logical.LogicalJoin) {
+                org.apache.calcite.rel.logical.LogicalJoin join =
+                        (org.apache.calcite.rel.logical.LogicalJoin) node;
+                detail = "[" + join.getJoinType().lowerName + "]";
+            }
+        } catch (Exception ignored) {
+            // best-effort description
+        }
+        return typeName + detail;
     }
 
     /**
