@@ -18,6 +18,8 @@ import org.autorewriter.rewriter.rule.match.Match;
 import org.autorewriter.rewriter.rule.model.Model;
 import org.autorewriter.rewriter.rule.symbol.Symbol;
 import org.autorewriter.rewriter.rule.symbol.SymbolExtractor;
+import org.autorewriter.rewriter.rule.util.ColumnRef;
+import org.autorewriter.rewriter.rule.util.ColumnRefRegistry;
 
 import java.util.*;
 
@@ -111,6 +113,19 @@ public class AutoRewriteRule extends RelOptRule {
                 log.warn("Rule[{}] rewrite aborted: field count mismatch (expected {}, got {})",
                         ruleId, originalNode.getRowType().getFieldCount(),
                         adjustedNode.getRowType().getFieldCount());
+                return;
+            }
+
+            // Verify output column identity preservation (WeTune-aligned).
+            // The rewritten plan must produce the same output columns as the original.
+            // This prevents over-matching where a stripped rule matches the wrong node
+            // (e.g., outer InSubFilter instead of inner) and corrupts the plan.
+            ColumnRefRegistry verifyRegistry = new ColumnRefRegistry();
+            List<ColumnRef> origCols = verifyRegistry.outputColumnsOf(originalNode);
+            List<ColumnRef> newCols = verifyRegistry.outputColumnsOf(adjustedNode);
+            if (!origCols.equals(newCols)) {
+                log.info("Rule[{}] rewrite aborted: output columns changed {} -> {}",
+                        ruleId, origCols, newCols);
                 return;
             }
 
