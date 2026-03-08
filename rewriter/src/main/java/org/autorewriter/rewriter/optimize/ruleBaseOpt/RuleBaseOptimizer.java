@@ -151,6 +151,12 @@ public class RuleBaseOptimizer implements BaseOptimizer {
 
         // Post-process: aligned with CostBaseOptimizer
         result = SubQueryTreeResolver.resolve(result);
+
+        // Save the plan before FilterMerger for debugging/comparison with WeTune
+        if (trace != null) {
+            trace.setRawOptimizedPlan(result);
+        }
+
         result = FilterMerger.merge(result);
 
         log.info("RBO optimization completed, {} rules registered", rules.size());

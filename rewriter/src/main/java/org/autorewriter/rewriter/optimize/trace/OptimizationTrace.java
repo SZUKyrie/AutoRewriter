@@ -1,6 +1,7 @@
 package org.autorewriter.rewriter.optimize.trace;
 
 import lombok.Getter;
+import lombok.Setter;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
 import org.apache.calcite.sql.SqlDialect;
@@ -26,6 +27,10 @@ public class OptimizationTrace {
 
     /** Every rule fire event, in chronological order */
     private final List<RuleApplicationStep> steps = new ArrayList<>();
+
+    /** The optimized plan before post-processing (FilterMerger etc.), if set */
+    @Setter
+    private RelNode rawOptimizedPlan;
 
     /**
      * Append one rule-fire record.
