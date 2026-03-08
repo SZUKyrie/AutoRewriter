@@ -77,14 +77,17 @@ public class NormalizeJoin {
         RelNode lhs = unwrap(join.getLeft());
         RelNode rhs = unwrap(join.getRight());
 
-        // Only rotate if RHS is a join (right-deep pattern)
-        if (!(rhs instanceof Join)) {
+        // Look through identity Projections to find underlying Joins
+        RelNode rhsInner = unwrapIdentityProject(rhs);
+
+        // Only rotate if RHS (possibly under an identity Proj) is a join
+        if (!(rhsInner instanceof Join)) {
             return join;
         }
 
-        Join rhsJoin = (Join) rhs;
-        RelNode b = unwrap(rhsJoin.getLeft());   // RHS-join's left
-        RelNode c = unwrap(rhsJoin.getRight());  // RHS-join's right
+        Join rhsJoin = (Join) rhsInner;
+        RelNode b = unwrap(rhsJoin.getLeft());
+        RelNode c = unwrap(rhsJoin.getRight());
 
         // Determine which side of rhsJoin contains the keys referenced
         // by join's right-side join condition
@@ -235,6 +238,30 @@ public class NormalizeJoin {
     private static RelNode unwrap(RelNode node) {
         while (node instanceof HepRelVertex) {
             node = ((HepRelVertex) node).getCurrentRel();
+        }
+        return node;
+    }
+
+    /**
+     * Unwrap identity Projections to find the underlying node.
+     * Identity projections are pass-through (all columns in order, no transformation).
+     */
+    private static RelNode unwrapIdentityProject(RelNode node) {
+        node = unwrap(node);
+        while (node instanceof org.apache.calcite.rel.logical.LogicalProject) {
+            org.apache.calcite.rel.logical.LogicalProject proj =
+                    (org.apache.calcite.rel.logical.LogicalProject) node;
+            boolean isIdentity = true;
+            if (proj.getProjects().size() != proj.getInput().getRowType().getFieldCount()) break;
+            for (int i = 0; i < proj.getProjects().size(); i++) {
+                RexNode expr = proj.getProjects().get(i);
+                if (!(expr instanceof RexInputRef) || ((RexInputRef) expr).getIndex() != i) {
+                    isIdentity = false;
+                    break;
+                }
+            }
+            if (!isIdentity) break;
+            node = unwrap(proj.getInput());
         }
         return node;
     }

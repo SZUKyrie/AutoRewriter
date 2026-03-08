@@ -220,7 +220,11 @@ public class Instantiation {
      */
     private static RelNode wrapWithIdentityProjectIfNeeded(RelNode node) {
         if (node instanceof LogicalTableScan) {
-            return node; // TableScan already has a clean namespace
+            return node;
+        }
+        // Don't double-wrap: if input is already an identity Projection, skip
+        if (isIdentityProjection(node)) {
+            return node;
         }
         RexBuilder rexBuilder = node.getCluster().getRexBuilder();
         RelDataType rowType = node.getRowType();
@@ -234,12 +238,35 @@ public class Instantiation {
         return LogicalProject.create(node, Collections.emptyList(), projects, fieldNames);
     }
 
+    /**
+     * Check if a node is an identity projection (projects all input columns
+     * in order with no transformation). Used to avoid double-wrapping.
+     */
+    private static boolean isIdentityProjection(RelNode node) {
+        if (!(node instanceof LogicalProject)) return false;
+        LogicalProject proj = (LogicalProject) node;
+        if (proj.getProjects().size() != proj.getInput().getRowType().getFieldCount()) return false;
+        for (int i = 0; i < proj.getProjects().size(); i++) {
+            RexNode expr = proj.getProjects().get(i);
+            if (!(expr instanceof RexInputRef) || ((RexInputRef) expr).getIndex() != i) return false;
+        }
+        return true;
+    }
+
     private RexNode rebuildJoinCondition(LogicalJoin template, RelNode left, RelNode right) {
         RexNode templateCond = template.getCondition();
         int tLeftFieldCount = template.getLeft().getRowType().getFieldCount();
-        List<int[]> templatePairs = extractJoinKeyPairs(templateCond, tLeftFieldCount);
 
-        if (templatePairs.isEmpty()) {
+        // Extract join key pairs using FIELD NAMES (not index ranges).
+        // Template tables have 10 columns each (a0-a9), so both key indices
+        // may fall within the left table's range. We use field names from
+        // the template's combined row type to identify the symbols.
+        // Use left/right child field names directly (not disambiguated combined row type)
+        List<String> tLeftFields = template.getLeft().getRowType().getFieldNames();
+        List<String> tRightFields = template.getRight().getRowType().getFieldNames();
+        List<RexInputRef[]> refPairs = extractRefPairs(templateCond);
+
+        if (refPairs.isEmpty()) {
             RexNode inst = instantiateRexNode(templateCond, null);
             return inst != null ? inst : templateCond;
         }
@@ -247,30 +274,55 @@ public class Instantiation {
         RexBuilder rexBuilder = left.getCluster().getRexBuilder();
         List<RexNode> equalities = new ArrayList<>();
 
-        for (int[] tPair : templatePairs) {
-            int tLeftIdx = tPair[0];
-            int tRightIdx = tPair[1] - tLeftFieldCount;
+        for (RexInputRef[] pair : refPairs) {
+            int idx0 = pair[0].getIndex();
+            int idx1 = pair[1].getIndex();
 
-            List<String> tLeftFields = template.getLeft().getRowType().getFieldNames();
-            List<String> tRightFields = template.getRight().getRowType().getFieldNames();
-
-            String leftField = tLeftIdx < tLeftFields.size() ? tLeftFields.get(tLeftIdx) : null;
-            String rightField = tRightIdx < tRightFields.size() ? tRightFields.get(tRightIdx) : null;
+            // Resolve field names from the correct child
+            String leftName = null, rightName = null;
+            if (idx0 < tLeftFieldCount && idx1 >= tLeftFieldCount) {
+                // idx0 from left, idx1 from right
+                leftName = idx0 < tLeftFields.size() ? tLeftFields.get(idx0) : null;
+                rightName = (idx1 - tLeftFieldCount) < tRightFields.size()
+                        ? tRightFields.get(idx1 - tLeftFieldCount) : null;
+            } else if (idx1 < tLeftFieldCount && idx0 >= tLeftFieldCount) {
+                // idx1 from left, idx0 from right
+                leftName = idx1 < tLeftFields.size() ? tLeftFields.get(idx1) : null;
+                rightName = (idx0 - tLeftFieldCount) < tRightFields.size()
+                        ? tRightFields.get(idx0 - tLeftFieldCount) : null;
+            } else if (idx0 < tLeftFieldCount && idx1 < tLeftFieldCount) {
+                // Both on left side — use left child's field names
+                leftName = idx0 < tLeftFields.size() ? tLeftFields.get(idx0) : null;
+                rightName = idx1 < tLeftFields.size() ? tLeftFields.get(idx1) : null;
+            } else {
+                // Both on right side — use right child's field names
+                int rIdx0 = idx0 - tLeftFieldCount;
+                int rIdx1 = idx1 - tLeftFieldCount;
+                leftName = rIdx0 < tRightFields.size() ? tRightFields.get(rIdx0) : null;
+                rightName = rIdx1 < tRightFields.size() ? tRightFields.get(rIdx1) : null;
+            }
 
             int newLeftIdx = -1;
             int newRightIdx = -1;
 
-            // Resolve left join key using interpretAttrs + registry
-            if (leftField != null && SymbolKind.isSymbolName(leftField)) {
-                List<ColumnRef> refs = interpretAttrs(Symbol.of(leftField));
+            if (leftName != null && SymbolKind.isSymbolName(leftName)) {
+                List<ColumnRef> refs = interpretAttrs(Symbol.of(leftName));
+                if (refs == null) {
+                    Symbol sym = Symbol.of(leftName);
+                    Symbol src = constraints.instantiationOf(sym);
+                    refs = model.ofAttrs(src != null ? src : sym);
+                }
                 if (refs != null && !refs.isEmpty()) {
                     newLeftIdx = registry.resolveIndex(refs.get(0), left);
                 }
             }
-
-            // Resolve right join key using interpretAttrs + registry
-            if (rightField != null && SymbolKind.isSymbolName(rightField)) {
-                List<ColumnRef> refs = interpretAttrs(Symbol.of(rightField));
+            if (rightName != null && SymbolKind.isSymbolName(rightName)) {
+                List<ColumnRef> refs = interpretAttrs(Symbol.of(rightName));
+                if (refs == null) {
+                    Symbol sym = Symbol.of(rightName);
+                    Symbol src = constraints.instantiationOf(sym);
+                    refs = model.ofAttrs(src != null ? src : sym);
+                }
                 if (refs != null && !refs.isEmpty()) {
                     newRightIdx = registry.resolveIndex(refs.get(0), right);
                 }
@@ -279,11 +331,9 @@ public class Instantiation {
             if (newLeftIdx >= 0 && newRightIdx >= 0) {
                 RelDataType leftType = left.getRowType().getFieldList().get(newLeftIdx).getType();
                 RelDataType rightType = right.getRowType().getFieldList().get(newRightIdx).getType();
-
                 RexNode leftRef = rexBuilder.makeInputRef(leftType, newLeftIdx);
                 RexNode rightRef = rexBuilder.makeInputRef(rightType,
                         left.getRowType().getFieldCount() + newRightIdx);
-
                 equalities.add(rexBuilder.makeCall(SqlStdOperatorTable.EQUALS, leftRef, rightRef));
             }
         }
@@ -291,6 +341,35 @@ public class Instantiation {
         if (equalities.isEmpty()) return rexBuilder.makeLiteral(true);
         if (equalities.size() == 1) return equalities.get(0);
         return rexBuilder.makeCall(SqlStdOperatorTable.AND, equalities);
+    }
+
+    /**
+     * Extract equi-join RexInputRef pairs from a condition, regardless of
+     * which side they're on (unlike extractJoinKeyPairs which requires
+     * left < threshold < right).
+     */
+    private static List<RexInputRef[]> extractRefPairs(RexNode condition) {
+        List<RexInputRef[]> pairs = new ArrayList<>();
+        extractRefPairsRecursive(condition, pairs);
+        return pairs;
+    }
+
+    private static void extractRefPairsRecursive(RexNode condition, List<RexInputRef[]> pairs) {
+        if (condition instanceof org.apache.calcite.rex.RexCall) {
+            org.apache.calcite.rex.RexCall call = (org.apache.calcite.rex.RexCall) condition;
+            String opName = call.getOperator().getName();
+            if ("=".equals(opName) && call.getOperands().size() == 2) {
+                RexNode l = call.getOperands().get(0);
+                RexNode r = call.getOperands().get(1);
+                if (l instanceof RexInputRef && r instanceof RexInputRef) {
+                    pairs.add(new RexInputRef[]{(RexInputRef) l, (RexInputRef) r});
+                }
+            } else if ("AND".equals(opName)) {
+                for (RexNode operand : call.getOperands()) {
+                    extractRefPairsRecursive(operand, pairs);
+                }
+            }
+        }
     }
 
     // ── AGGREGATE ──────────────────────────────────────────────────────────

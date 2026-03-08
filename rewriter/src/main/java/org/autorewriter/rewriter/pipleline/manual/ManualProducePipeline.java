@@ -58,7 +58,9 @@ public class ManualProducePipeline extends ProducePipeline {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);
 
             // Preprocess source template: aligned with CostBaseProducePipeline
+            System.out.println("[Template " + i + " BEFORE expand]\n" + ruleContext.getSourceRelNode().explain());
             RelNode sourceTemplate = InSubFilterExpander.expand(ruleContext.getSourceRelNode());
+            System.out.println("[Template " + i + " AFTER expand]\n" + sourceTemplate.explain());
             RuleAnalysisContext expandedContext = new RuleAnalysisContext(
                     sourceTemplate, ruleContext.getTargetRelNode(),
                     ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());

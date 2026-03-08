@@ -93,23 +93,19 @@ public final class SymbolExtractor {
     }
 
     private static void extractFromFilter(LogicalFilter filter, Map<String, Symbol> symbols) {
-        // Walk condition for p\d+ and a\d+ placeholders in operator names
+        // Walk condition for p\d+ placeholders in operator names only.
+        // Do NOT extract field names from row type — they come from template tables
+        // (a0-a9) and would collide with real rule symbols, causing incorrect
+        // source/target classification in Constraints.build.
         walkRexNode(filter.getCondition(), symbols);
-        // Extract field names only for columns actually referenced by the condition.
-        // Do NOT extract all row type field names — Filter inherits its row type from
-        // the child, which may be a virtual template table with placeholder column names
-        // (a0-a9) that would collide with real target-side symbols.
-        extractReferencedFieldNames(filter.getCondition(),
-                filter.getRowType().getFieldNames(), symbols);
     }
 
     private static void extractFromJoin(LogicalJoin join, Map<String, Symbol> symbols) {
-        // Walk join condition for p\d+ and a\d+ placeholders in operator names
+        // Walk join condition for p\d+ placeholders in operator names only.
+        // Join key symbols (a2, a3, etc.) are resolved via constraints (AttrsEq),
+        // not via SymbolExtractor. Extracting field names from the join's row type
+        // would pull in template table column names that collide with rule symbols.
         walkRexNode(join.getCondition(), symbols);
-        // Extract field names only for columns referenced in the join condition.
-        // Same reason as Filter: don't extract all row type field names.
-        extractReferencedFieldNames(join.getCondition(),
-                join.getRowType().getFieldNames(), symbols);
     }
 
     private static void extractFromAggregate(LogicalAggregate agg, Map<String, Symbol> symbols) {

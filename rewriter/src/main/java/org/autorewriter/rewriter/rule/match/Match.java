@@ -8,6 +8,9 @@ import org.apache.calcite.rel.logical.*;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rex.*;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.LogicalInSubFilter;
+import org.autorewriter.rewriter.rule.constraint.Constraint;
+import org.autorewriter.rewriter.rule.constraint.ConstraintKind;
+import org.autorewriter.rewriter.rule.constraint.Constraints;
 import org.autorewriter.rewriter.rule.model.Model;
 import org.autorewriter.rewriter.rule.symbol.*;
 import org.autorewriter.rewriter.rule.util.ColumnRef;
@@ -83,7 +86,13 @@ public class Match {
             return matchProject((LogicalProject) template, (LogicalProject) query, model);
         }
 
-        // 4. LogicalFilter (also handles LogicalInSubFilter as part of filter chain)
+        // 4. LogicalInSubFilter — bind lhsRef attrs symbol (WeTune matchInSub)
+        if (template instanceof LogicalInSubFilter) {
+            if (!(query instanceof LogicalInSubFilter)) return false;
+            return matchInSubFilter((LogicalInSubFilter) template, (LogicalInSubFilter) query, model);
+        }
+
+        // 5. LogicalFilter (also handles LogicalInSubFilter as part of filter chain)
         if (template instanceof LogicalFilter) {
             if (query instanceof LogicalFilter) {
                 return matchFilter((LogicalFilter) template, (LogicalFilter) query, model);
@@ -202,6 +211,50 @@ public class Match {
 
     // ── Filter matching ───────────────────────────────────────────────────
 
+    // ── LogicalInSubFilter matching (WeTune matchInSub) ─────────────────
+
+    /**
+     * Match a template LogicalInSubFilter against a query LogicalInSubFilter.
+     * Binds the lhsRef's corresponding attrs symbol, aligned with WeTune's
+     * {@code Match.matchInSub()} which extracts {@code InSubNode.expr()}
+     * value references and assigns them to the attrs symbol.
+     */
+    private static boolean matchInSubFilter(LogicalInSubFilter template,
+                                             LogicalInSubFilter query, Model model) {
+        // 1. Recursively match left (filtered input) and right (subquery)
+        if (!match(template.getLeft(), query.getLeft(), model)) return false;
+        if (!match(template.getRight(), query.getRight(), model)) return false;
+
+        // 2. Extract and bind the lhsRef attrs symbol
+        // In WeTune, InSubFilter<a> means `a` is the column(s) on the LHS of the IN check.
+        // The template's lhsRef is a RexInputRef whose index maps to a field name
+        // in the left child's row type. If that field name is a symbol (a\d+),
+        // bind it to the query's lhsRef resolved as a ColumnRef.
+        RexNode tLhsRef = template.getLhsRef();
+        if (tLhsRef instanceof RexInputRef) {
+            int tIdx = ((RexInputRef) tLhsRef).getIndex();
+            RelNode tLeft = unwrapHepVertex(template.getLeft());
+            List<String> tLeftFields = tLeft.getRowType().getFieldNames();
+            if (tIdx < tLeftFields.size()) {
+                String fieldName = tLeftFields.get(tIdx);
+                if (SymbolKind.isSymbolName(fieldName) && fieldName.charAt(0) == 'a') {
+                    // Resolve query's lhsRef to ColumnRef
+                    RexNode qLhsRef = query.getLhsRef();
+                    if (qLhsRef instanceof RexInputRef) {
+                        int qIdx = ((RexInputRef) qLhsRef).getIndex();
+                        RelNode qLeft = unwrapHepVertex(query.getLeft());
+                        ColumnRef ref = ColumnRefResolver.resolve(qIdx, qLeft);
+                        List<ColumnRef> refs = new ArrayList<>();
+                        refs.add(ref);
+                        if (!model.assign(Symbol.of(fieldName), refs)) return false;
+                    }
+                }
+            }
+        }
+
+        return model.checkConstraints();
+    }
+
     private static boolean matchFilter(LogicalFilter template, LogicalFilter query, Model model) {
         RexNode templateCond = template.getCondition();
 
@@ -311,61 +364,108 @@ public class Match {
         return model.checkConstraints();
     }
 
+    /**
+     * Match join conditions and bind join key attrs symbols.
+     *
+     * Strategy:
+     * 1. Extract equi-join key pairs from QUERY condition using Calcite
+     * 2. Find join key symbols from constraints' AttrsSub relationships
+     * 3. If no constraints available, extract from template children's field names
+     * 4. Bind query key ColumnRefs to the found symbols
+     */
     private static boolean matchJoinCondition(LogicalJoin template, LogicalJoin query, Model model, boolean flipped) {
-        RexNode templateCond = template.getCondition();
         RexNode queryCond = query.getCondition();
-
-        int tLeftFieldCount = template.getLeft().getRowType().getFieldCount();
         int qLeftFieldCount = query.getLeft().getRowType().getFieldCount();
 
-        // Extract equi-join key pairs from template and query conditions
-        List<int[]> templatePairs = extractJoinKeyPairs(templateCond, tLeftFieldCount);
         List<int[]> queryPairs = extractJoinKeyPairs(queryCond, qLeftFieldCount);
-
-        if (templatePairs.isEmpty() || queryPairs.isEmpty()) {
-            // Fallback: try matching via RexNode matching
-            return matchRexNode(templateCond, queryCond, query, model);
+        if (queryPairs.isEmpty()) {
+            return matchRexNode(template.getCondition(), queryCond, query, model);
         }
 
-        // For each template pair, find a matching query pair and bind attrs
-        if (templatePairs.size() > queryPairs.size()) return false;
+        RelNode qLeftChild = unwrapHepVertex(flipped ? query.getRight() : query.getLeft());
+        RelNode qRightChild = unwrapHepVertex(flipped ? query.getLeft() : query.getRight());
 
-        for (int ti = 0; ti < templatePairs.size(); ti++) {
-            int[] tPair = templatePairs.get(ti);
-            if (ti >= queryPairs.size()) return false;
-            int[] qPair = queryPairs.get(ti);
+        // Find join key symbols: first try constraints, then template children field names
+        Constraints constraints = model.constraints();
+        RelNode tLeft = unwrapHepVertex(template.getLeft());
+        RelNode tRight = unwrapHepVertex(template.getRight());
 
-            int tLeftIdx = tPair[0];
-            int tRightIdx = tPair[1] - tLeftFieldCount;
+        Symbol leftKeySym = findJoinKeySymbol(constraints, tLeft);
+        Symbol rightKeySym = findJoinKeySymbol(constraints, tRight);
 
-            // Get placeholder names from template's children's field names
-            List<String> tLeftFields = template.getLeft().getRowType().getFieldNames();
-            List<String> tRightFields = template.getRight().getRowType().getFieldNames();
-
-            String leftField = tLeftIdx < tLeftFields.size() ? tLeftFields.get(tLeftIdx) : null;
-            String rightField = tRightIdx < tRightFields.size() ? tRightFields.get(tRightIdx) : null;
-
-            // Get actual column refs from query
+        for (int[] qPair : queryPairs) {
             int qLeftIdx = flipped ? (qPair[1] - qLeftFieldCount) : qPair[0];
             int qRightIdx = flipped ? qPair[0] : (qPair[1] - qLeftFieldCount);
 
-            RelNode qLeftChild = unwrapHepVertex(flipped ? query.getRight() : query.getLeft());
-            RelNode qRightChild = unwrapHepVertex(flipped ? query.getLeft() : query.getRight());
-
-            if (leftField != null && SymbolKind.isSymbolName(leftField) && leftField.charAt(0) == 'a') {
-                Symbol sym = Symbol.of(leftField);
-                ColumnRef ref = ColumnRefResolver.resolve(qLeftIdx, qLeftChild);
-                if (!model.assign(sym, Collections.singletonList(ref))) return false;
+            if (leftKeySym != null) {
+                ColumnRef leftRef = ColumnRefResolver.resolve(qLeftIdx, qLeftChild);
+                if (!model.assign(leftKeySym, Collections.singletonList(leftRef))) return false;
             }
 
-            if (rightField != null && SymbolKind.isSymbolName(rightField) && rightField.charAt(0) == 'a') {
-                Symbol sym = Symbol.of(rightField);
-                ColumnRef ref = ColumnRefResolver.resolve(qRightIdx, qRightChild);
-                if (!model.assign(sym, Collections.singletonList(ref))) return false;
+            if (rightKeySym != null) {
+                ColumnRef rightRef = ColumnRefResolver.resolve(qRightIdx, qRightChild);
+                if (!model.assign(rightKeySym, Collections.singletonList(rightRef))) return false;
             }
         }
 
         return true;
+    }
+
+    /**
+     * Find the attrs symbol for a join child — the column used as the equi-join key.
+     *
+     * Strategy:
+     * 1. Find the child's table/schema symbol (t\d+ or s\d+)
+     * 2. Look up AttrsSub constraints for that table/schema
+     * 3. If no constraints, fall back to the child's first a\d+ field name
+     */
+    private static Symbol findJoinKeySymbol(Constraints constraints, RelNode child) {
+        // Strategy 1: Use constraints (AttrsSub)
+        String tableOrSchema = findTableOrSchemaSymbol(child);
+        if (tableOrSchema != null && constraints != null) {
+            Symbol tableSym = Symbol.of(tableOrSchema);
+            for (Constraint c : constraints.ofKind(ConstraintKind.ATTRS_SUB)) {
+                Symbol[] syms = c.symbols();
+                if (syms[1].equals(tableSym)) {
+                    return syms[0];
+                }
+            }
+        }
+
+        // Strategy 2: First a\d+ field name from child (for simple cases like Input<t0>)
+        List<String> fieldNames = child.getRowType().getFieldNames();
+        for (String fn : fieldNames) {
+            if (SymbolKind.isSymbolName(fn) && fn.charAt(0) == 'a') {
+                return Symbol.of(fn);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Find the table symbol (t\d+) or schema symbol (s\d+) for a template node.
+     */
+    private static String findTableOrSchemaSymbol(RelNode node) {
+        node = unwrapHepVertex(node);
+        // For LogicalTableScan: table name is the symbol
+        if (node instanceof LogicalTableScan) {
+            List<String> names = node.getTable().getQualifiedName();
+            String name = names.get(names.size() - 1);
+            if (SymbolKind.isSymbolName(name)) return name;
+        }
+        // For LogicalProject: look for schema symbol (s\d+) in field names
+        if (node instanceof LogicalProject) {
+            List<String> fieldNames = node.getRowType().getFieldNames();
+            for (String fn : fieldNames) {
+                if (SymbolKind.isSymbolName(fn) && fn.charAt(0) == 's') return fn;
+            }
+        }
+        // Recurse into first child
+        if (node.getInputs().size() > 0) {
+            return findTableOrSchemaSymbol(node.getInput(0));
+        }
+        return null;
     }
 
     // ── RexNode matching ──────────────────────────────────────────────────
