@@ -42,7 +42,10 @@ public class Instantiation {
     }
 
     public static RelNode instantiate(RelNode targetTemplate, Model model, Constraints constraints) {
-        return new Instantiation(model, constraints).instantiateNode(targetTemplate);
+        RelNode result = new Instantiation(model, constraints).instantiateNode(targetTemplate);
+        // Normalize join trees to left-deep form (WeTune's normalizePlan → normalizeJoin)
+        result = new NormalizeJoin().normalize(result);
+        return result;
     }
 
     private RelNode instantiateNode(RelNode template) {
