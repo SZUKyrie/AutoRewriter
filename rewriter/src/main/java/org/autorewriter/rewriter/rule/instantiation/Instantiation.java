@@ -167,7 +167,12 @@ public class Instantiation {
         RexNode condition = instantiateRexNode(template.getCondition(), child);
         if (condition == null) condition = template.getCondition();
 
-        return LogicalFilter.create(child, condition);
+        RelNode result = LogicalFilter.create(child, condition);
+
+        // Re-apply unmatched filters scoped to this filter's predicate symbol (virtualExpr).
+        result = applyVirtualExprs(template.getCondition(), result);
+
+        return result;
     }
 
     private RelNode instantiateInSubFilter(LogicalFilter template) {
@@ -179,6 +184,31 @@ public class Instantiation {
         RexSubQuery inSub = findInSubQuery(condition);
         if (inSub != null) {
             RexNode lhsRef = inSub.getOperands().get(0);
+
+            // Resolve lhsRef using interpretAttrs: the template's $N maps to aN
+            // in the template table, which through constraints maps to the actual column.
+            // Without this, $7 (a7 in template) stays as $7 (closed_account) instead
+            // of being resolved to $0 (people.id) via AttrsEq(a7, a3).
+            if (lhsRef instanceof RexInputRef) {
+                int templateIdx = ((RexInputRef) lhsRef).getIndex();
+                RelNode templateChild = Match.unwrapHepVertex(template.getInput());
+                List<String> templateFields = templateChild.getRowType().getFieldNames();
+                if (templateIdx < templateFields.size()) {
+                    String symName = templateFields.get(templateIdx);
+                    if (SymbolKind.isSymbolName(symName) && symName.charAt(0) == 'a') {
+                        List<ColumnRef> refs = interpretAttrs(Symbol.of(symName));
+                        if (refs != null && !refs.isEmpty()) {
+                            int newIdx = registry.resolveIndex(refs.get(0), child);
+                            if (newIdx >= 0) {
+                                RexBuilder rb = child.getCluster().getRexBuilder();
+                                lhsRef = rb.makeInputRef(
+                                        child.getRowType().getFieldList().get(newIdx).getType(), newIdx);
+                            }
+                        }
+                    }
+                }
+            }
+
             LogicalInSubFilter inSubFilter = LogicalInSubFilter.create(child, inSub.rel, lhsRef);
             List<RexNode> remaining = removeSubQuery(condition, inSub);
             if (!remaining.isEmpty()) {
@@ -189,6 +219,75 @@ public class Instantiation {
             return inSubFilter;
         }
         return LogicalFilter.create(child, condition);
+    }
+
+    /**
+     * Apply virtual expressions (unmatched filters) scoped to the predicate symbol
+     * in the given template condition.
+     *
+     * <p>During matching, if a source filter chain had more filters than the template,
+     * the extras were stored under {@code "virtualExpr_<predSymbol>"} in the Model
+     * (e.g., {@code "virtualExpr_p0"}). Here we:
+     * <ol>
+     *   <li>Extract the target predicate symbol from the template condition (e.g., {@code p1})</li>
+     *   <li>Map it to the source predicate via constraints (e.g., {@code p1 → p0})</li>
+     *   <li>Look up {@code "virtualExpr_p0"} in the Model</li>
+     *   <li>Rebind column indices and wrap with additional {@link LogicalFilter} nodes</li>
+     * </ol>
+     *
+     * <p>This is WeTune's virtualExpr mechanism: per-predicate scoping ensures multiple
+     * filter chains in the same rule don't interfere with each other.
+     *
+     * @param templateCondition the target template filter's condition (contains pred symbol)
+     * @param result            the current instantiated node to wrap with extra filters
+     * @return the result with virtualExprs applied, or unchanged if none exist
+     */
+    @SuppressWarnings("unchecked")
+    private RelNode applyVirtualExprs(RexNode templateCondition, RelNode result) {
+        // 1. Extract target predicate symbol from template condition
+        String targetPredName = extractPredSymbol(templateCondition);
+        if (targetPredName == null) return result;
+
+        // 2. Map to source predicate via constraints (e.g., PredicateEq(p1, p0) → p0)
+        Symbol targetSym = Symbol.of(targetPredName);
+        Symbol sourceSym = constraints.instantiationOf(targetSym);
+        String sourcePredName = (sourceSym != null ? sourceSym : targetSym).name();
+
+        // 3. Look up virtualExpr stored under source predicate key
+        String key = "virtualExpr_" + sourcePredName;
+        Object[] entry = (Object[]) model.ofExtra(key);
+        if (entry == null) return result;
+
+        // Consume once (clear after use)
+        model.putExtra(key, null);
+
+        List<RexNode> conditions = (List<RexNode>) entry[0];
+        RelNode sourceContext = (RelNode) entry[1];
+        if (sourceContext == null || conditions == null || conditions.isEmpty()) return result;
+
+        // 4. Rebind each condition and wrap with LogicalFilter
+        for (RexNode cond : conditions) {
+            RexNode reboundCond = rebindPredicateRefs(cond, sourceContext, result);
+            if (reboundCond != null) {
+                result = LogicalFilter.create(result, reboundCond);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Extract predicate symbol name ({@code p\d+}) from a template condition.
+     * Template filter conditions from the rule DSL are {@link RexCall} nodes whose
+     * operator name is a predicate placeholder.
+     */
+    private static String extractPredSymbol(RexNode condition) {
+        if (condition instanceof RexCall) {
+            String opName = ((RexCall) condition).getOperator().getName();
+            if (SymbolKind.isSymbolName(opName) && opName.charAt(0) == 'p') {
+                return opName;
+            }
+        }
+        return null;
     }
 
     // ── JOIN ───────────────────────────────────────────────────────────────

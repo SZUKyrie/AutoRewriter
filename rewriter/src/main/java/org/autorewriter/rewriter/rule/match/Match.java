@@ -415,24 +415,44 @@ public class Match {
      * Find the attrs symbol for a join child — the column used as the equi-join key.
      *
      * Strategy:
-     * 1. Find the child's table/schema symbol (t\d+ or s\d+)
-     * 2. Look up AttrsSub constraints for that table/schema
-     * 3. If no constraints, fall back to the child's first a\d+ field name
+     * 1. For Proj children: prefer schema-based (s\d+) AttrsSub lookup, since the
+     *    Proj's output schema defines the join key, not the underlying table.
+     *    The schema symbol (e.g., s0) is NOT embedded in the Proj's field names —
+     *    it only appears in AttrsSub constraints like AttrsSub(a2, s0).
+     * 2. Otherwise: find the child's table symbol (t\d+) and look up AttrsSub
+     * 3. Fallback: use the child's first a\d+ field name
      */
     private static Symbol findJoinKeySymbol(Constraints constraints, RelNode child) {
-        // Strategy 1: Use constraints (AttrsSub)
-        String tableOrSchema = findTableOrSchemaSymbol(child);
-        if (tableOrSchema != null && constraints != null) {
-            Symbol tableSym = Symbol.of(tableOrSchema);
-            for (Constraint c : constraints.ofKind(ConstraintKind.ATTRS_SUB)) {
-                Symbol[] syms = c.symbols();
-                if (syms[1].equals(tableSym)) {
-                    return syms[0];
+        child = unwrapHepVertex(child);
+
+        if (constraints != null) {
+            // Strategy 1: For Proj nodes, prefer schema-based AttrsSub lookup.
+            // Template Proj<a1 s0> loses the s0 metadata in the Calcite LogicalProject,
+            // but AttrsSub(a2, s0) still records which attrs belong to the schema.
+            if (child instanceof LogicalProject) {
+                for (Constraint c : constraints.ofKind(ConstraintKind.ATTRS_SUB)) {
+                    Symbol[] syms = c.symbols();
+                    String name = syms[1].name();
+                    if (name.charAt(0) == 's' && SymbolKind.isSymbolName(name)) {
+                        return syms[0];
+                    }
+                }
+            }
+
+            // Strategy 2: Use constraints (AttrsSub) with table symbol
+            String tableOrSchema = findTableOrSchemaSymbol(child);
+            if (tableOrSchema != null) {
+                Symbol tableSym = Symbol.of(tableOrSchema);
+                for (Constraint c : constraints.ofKind(ConstraintKind.ATTRS_SUB)) {
+                    Symbol[] syms = c.symbols();
+                    if (syms[1].equals(tableSym)) {
+                        return syms[0];
+                    }
                 }
             }
         }
 
-        // Strategy 2: First a\d+ field name from child (for simple cases like Input<t0>)
+        // Strategy 3: First a\d+ field name from child (for simple cases like Input<t0>)
         List<String> fieldNames = child.getRowType().getFieldNames();
         for (String fn : fieldNames) {
             if (SymbolKind.isSymbolName(fn) && fn.charAt(0) == 'a') {

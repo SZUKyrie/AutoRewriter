@@ -106,10 +106,18 @@ public class NormalizeJoin {
         if (keysInB) {
             // Pattern 1: join0(A, join1(B, C)) => join1(join0(A, B), C)
             RelNode newInner = rebuildJoin(join, lhs, b);
+            // Recursively normalize newInner: after rotation, it may still be
+            // right-deep (e.g., B was itself a multi-way join from a query binding)
+            if (newInner instanceof Join) {
+                newInner = normalizeJoin((Join) newInner);
+            }
             result = rebuildJoin(rhsJoin, newInner, c);
         } else {
             // Pattern 2: join0(A, join1(B, C)) => join1(join0(A, C), B)
             RelNode newInner = rebuildJoin(join, lhs, c);
+            if (newInner instanceof Join) {
+                newInner = normalizeJoin((Join) newInner);
+            }
             result = rebuildJoin(rhsJoin, newInner, b);
         }
 

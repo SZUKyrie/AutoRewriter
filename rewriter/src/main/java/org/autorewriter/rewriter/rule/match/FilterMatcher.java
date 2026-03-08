@@ -3,10 +3,12 @@ package org.autorewriter.rewriter.rule.match;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.LogicalFilter;
+import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexSubQuery;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.LogicalInSubFilter;
 import org.autorewriter.rewriter.rule.model.Model;
+import org.autorewriter.rewriter.rule.symbol.SymbolKind;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -67,7 +69,36 @@ public class FilterMatcher {
         if (!Match.match(templateBottom, queryBottom, model)) return false;
 
         // Try to find an assignment of template filters to query filters
-        return assignFilters(templateChain, queryChain, 0, new boolean[queryChain.size()], queryOperator, model);
+        boolean[] used = new boolean[queryChain.size()];
+        if (!assignFilters(templateChain, queryChain, 0, used, queryOperator, model)) {
+            return false;
+        }
+
+        // Collect unmatched query simple filters (WeTune virtualExpr equivalent).
+        // Store per-predicate-symbol so multiple filter chains in the same rule
+        // don't interfere. Key: "virtualExpr_<predSymbol>" parallels "p0_context".
+        List<RexNode> unmatchedConditions = new ArrayList<>();
+        for (int i = 0; i < queryChain.size(); i++) {
+            if (!used[i] && queryChain.get(i) instanceof LogicalFilter) {
+                unmatchedConditions.add(((LogicalFilter) queryChain.get(i)).getCondition());
+            }
+        }
+        if (!unmatchedConditions.isEmpty()) {
+            // Find the predicate symbol from the first matched simple template filter
+            String predSymbol = null;
+            for (RelNode tmpl : templateChain) {
+                if (tmpl instanceof LogicalFilter && !isInSubFilter(tmpl)) {
+                    predSymbol = extractPredSymbol((LogicalFilter) tmpl);
+                    if (predSymbol != null) break;
+                }
+            }
+            if (predSymbol != null) {
+                model.putExtra("virtualExpr_" + predSymbol,
+                        new Object[]{unmatchedConditions, queryBottom});
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -182,6 +213,26 @@ public class FilterMatcher {
             for (RexNode operand : ((org.apache.calcite.rex.RexCall) node).getOperands()) {
                 RexSubQuery sub = extractRexSubQuery(operand);
                 if (sub != null) return sub;
+            }
+        }
+        return null;
+    }
+
+    // ── Predicate symbol extraction ─────────────────────────────────────
+
+    /**
+     * Extract the predicate symbol name (e.g., "p0") from a template filter's condition.
+     * Template conditions parsed from rule DSL are {@link RexCall} nodes whose operator
+     * name is a predicate placeholder ({@code p\d+}).
+     *
+     * @return the predicate symbol name, or {@code null} if not a placeholder
+     */
+    private static String extractPredSymbol(LogicalFilter filter) {
+        RexNode cond = filter.getCondition();
+        if (cond instanceof RexCall) {
+            String opName = ((RexCall) cond).getOperator().getName();
+            if (SymbolKind.isSymbolName(opName) && opName.charAt(0) == 'p') {
+                return opName;
             }
         }
         return null;

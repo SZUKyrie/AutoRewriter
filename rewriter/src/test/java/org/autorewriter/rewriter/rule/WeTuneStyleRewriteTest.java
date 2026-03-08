@@ -730,6 +730,130 @@ public class WeTuneStyleRewriteTest {
     }
 
     // -------------------------------------------------------
+    // Test 9: VirtualExpr — unmatched filter preserved
+    // -------------------------------------------------------
+
+    /**
+     * Test virtualExpr at the Match + Instantiation level (bypasses HepPlanner
+     * to avoid identity-rule infinite loops).
+     *
+     * <p>Rule: Filter<p0 a0>(Input<t0>) → Filter<p1 a1>(Input<t1>).
+     * The template has 1 filter; the query has 2 stacked filters.
+     * Verify: Match stores virtualExpr under "virtualExpr_p0",
+     * and Instantiation produces a result with 2 filters.</p>
+     */
+    @Test
+    public void testVirtualExprPreservesUnmatchedFilter() {
+        String ruleStr = "Filter<p0 a0>(Input<t0>)"
+            + "|Filter<p1 a1>(Input<t1>)"
+            + "|AttrsSub(a0,t0);"
+            + "TableEq(t1,t0);AttrsEq(a1,a0);PredicateEq(p1,p0)";
+
+        try {
+            RuleAnalysisContext ctx = RuleAnalyzer.analyze(ruleStr);
+            assertNotNull(ctx);
+
+            // Extract symbols and build constraints (same as AutoRewriteRule constructor)
+            var srcSymbols = org.autorewriter.rewriter.rule.symbol.SymbolExtractor.extract(ctx.getSourceRelNode());
+            var tgtSymbols = org.autorewriter.rewriter.rule.symbol.SymbolExtractor.extract(ctx.getTargetRelNode());
+            var constraints = org.autorewriter.rewriter.rule.constraint.Constraints.build(
+                    ctx.getMatchConstraints(), ctx.getRewriteConstraints(), srcSymbols, tgtSymbols);
+
+            // Query: Filter(>200)(Filter(>100)(customers))
+            relBuilder.clear();
+            RelNode query = relBuilder
+                .scan("customers")
+                .filter(relBuilder.call(SqlStdOperatorTable.GREATER_THAN,
+                        relBuilder.field("id"), relBuilder.literal(100)))
+                .filter(relBuilder.call(SqlStdOperatorTable.GREATER_THAN,
+                        relBuilder.field("id"), relBuilder.literal(200)))
+                .build();
+            assertEquals(2, countFilterLayers(query));
+
+            // Match source template against query
+            var model = new org.autorewriter.rewriter.rule.model.Model(constraints);
+            boolean matched = org.autorewriter.rewriter.rule.match.Match.match(
+                    ctx.getSourceRelNode(), query, model);
+            assertTrue(matched, "Source template should match 2-filter query");
+
+            // Verify virtualExpr stored under predicate-scoped key
+            assertNotNull(model.ofExtra("virtualExpr_p0"),
+                    "virtualExpr should be stored under 'virtualExpr_p0'");
+
+            // Instantiate target template
+            RelNode result = org.autorewriter.rewriter.rule.instantiation.Instantiation.instantiate(
+                    ctx.getTargetRelNode(), model, constraints);
+            assertNotNull(result);
+
+            // Verify: 2 filter layers (1 matched + 1 virtualExpr)
+            int filterCount = countFilterLayers(result);
+            assertEquals(2, filterCount,
+                "Result should have 2 filters (matched predicate + virtualExpr)");
+
+            // Verify virtualExpr consumed (cleared after use)
+            assertNull(model.ofExtra("virtualExpr_p0"),
+                    "virtualExpr should be consumed after instantiation");
+
+        } catch (Exception e) {
+            fail("testVirtualExprPreservesUnmatchedFilter: " + e.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------
+    // Test 10: VirtualExpr — no extra when filter counts match
+    // -------------------------------------------------------
+
+    /**
+     * Test that when template and query have the same number of filters,
+     * no virtualExpr is stored and the result has exactly the expected filters.
+     */
+    @Test
+    public void testNoVirtualExprWhenFilterCountsMatch() {
+        String ruleStr = "Filter<p0 a0>(Input<t0>)"
+            + "|Filter<p1 a1>(Input<t1>)"
+            + "|AttrsSub(a0,t0);"
+            + "TableEq(t1,t0);AttrsEq(a1,a0);PredicateEq(p1,p0)";
+
+        try {
+            RuleAnalysisContext ctx = RuleAnalyzer.analyze(ruleStr);
+            assertNotNull(ctx);
+
+            var srcSymbols = org.autorewriter.rewriter.rule.symbol.SymbolExtractor.extract(ctx.getSourceRelNode());
+            var tgtSymbols = org.autorewriter.rewriter.rule.symbol.SymbolExtractor.extract(ctx.getTargetRelNode());
+            var constraints = org.autorewriter.rewriter.rule.constraint.Constraints.build(
+                    ctx.getMatchConstraints(), ctx.getRewriteConstraints(), srcSymbols, tgtSymbols);
+
+            // Query: Filter(>100)(customers) — exactly 1 filter, matches 1:1
+            relBuilder.clear();
+            RelNode query = relBuilder
+                .scan("customers")
+                .filter(relBuilder.call(SqlStdOperatorTable.GREATER_THAN,
+                        relBuilder.field("id"), relBuilder.literal(100)))
+                .build();
+            assertEquals(1, countFilterLayers(query));
+
+            var model = new org.autorewriter.rewriter.rule.model.Model(constraints);
+            boolean matched = org.autorewriter.rewriter.rule.match.Match.match(
+                    ctx.getSourceRelNode(), query, model);
+            assertTrue(matched, "Source template should match 1-filter query");
+
+            // No virtualExpr when counts match
+            assertNull(model.ofExtra("virtualExpr_p0"),
+                    "No virtualExpr should be stored when filter counts match");
+
+            RelNode result = org.autorewriter.rewriter.rule.instantiation.Instantiation.instantiate(
+                    ctx.getTargetRelNode(), model, constraints);
+            assertNotNull(result);
+
+            assertEquals(1, countFilterLayers(result),
+                "Result should have exactly 1 filter (no virtualExpr)");
+
+        } catch (Exception e) {
+            fail("testNoVirtualExprWhenFilterCountsMatch: " + e.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------
     // Helper methods
     // -------------------------------------------------------
 
