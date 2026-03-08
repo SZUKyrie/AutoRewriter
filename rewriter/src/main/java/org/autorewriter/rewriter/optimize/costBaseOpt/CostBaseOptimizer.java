@@ -117,13 +117,13 @@ public class CostBaseOptimizer implements BaseOptimizer {
 
         // Logical transformation rules for join reordering
         // Commutativity: A ⋈ B → B ⋈ A (including LEFT↔RIGHT)
-        planner.addRule(CoreRules.JOIN_COMMUTE.config
-                .as(JoinCommuteRule.Config.class)
-                .withSwapOuter(true)
-                .toRule()
-        );
+//        planner.addRule(CoreRules.JOIN_COMMUTE.config
+//                .as(JoinCommuteRule.Config.class)
+//                .withSwapOuter(true)
+//                .toRule()
+//        );
         // Associativity: (A ⋈ B) ⋈ C → A ⋈ (B ⋈ C)
-        planner.addRule(CoreRules.JOIN_ASSOCIATE);
+        //planner.addRule(CoreRules.JOIN_ASSOCIATE);
         // Push join conditions into children
         //planner.addRule(CoreRules.JOIN_CONDITION_PUSH);
         // Push transitive predicates through join

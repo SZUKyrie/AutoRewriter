@@ -1,6 +1,7 @@
 package org.autorewriter.rewriter.rule.util;
 
 import org.apache.calcite.plan.hep.HepRelVertex;
+import org.apache.calcite.plan.volcano.RelSubset;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Join;
@@ -163,8 +164,19 @@ public class ColumnRefRegistry {
     }
 
     private static RelNode unwrap(RelNode node) {
-        while (node instanceof HepRelVertex) {
-            node = ((HepRelVertex) node).getCurrentRel();
+        while (node instanceof HepRelVertex || node instanceof RelSubset) {
+            if (node instanceof HepRelVertex) {
+                node = ((HepRelVertex) node).getCurrentRel();
+            } else {
+                RelNode best = ((RelSubset) node).getBest();
+                if (best != null) {
+                    node = best;
+                } else {
+                    // No best yet — use the original (first) RelNode in the set
+                    node = ((RelSubset) node).getOriginal();
+                    if (node == null) break;
+                }
+            }
         }
         return node;
     }

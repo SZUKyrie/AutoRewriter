@@ -35,6 +35,12 @@ public class AutoRewriteRule extends RelOptRule {
     private final RelNode targetTemplate;
     private final Constraints constraints;
 
+    // Cache the Model from the last successful matches() call.
+    // In VolcanoPlanner, RelSubset contents may change between matches() and onMatch(),
+    // causing re-matching in onMatch() to fail. Caching avoids this race condition.
+    private volatile Model lastMatchedModel;
+    private volatile RelNode lastMatchedNode;
+
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext) {
         this(operand, ruleContext, -1);
     }
@@ -79,6 +85,12 @@ public class AutoRewriteRule extends RelOptRule {
         }
 
         log.info("Rule[{}] match succeeded", ruleId);
+
+        // Cache for onMatch() — avoids re-matching in VolcanoPlanner where
+        // RelSubset contents may change between matches() and onMatch()
+        this.lastMatchedModel = model;
+        this.lastMatchedNode = queryNode;
+
         return true;
     }
 
@@ -89,18 +101,25 @@ public class AutoRewriteRule extends RelOptRule {
         try {
             RelNode queryNode = call.rel(0);
 
-            // Re-run matching to get a fresh Model bound to THIS specific node.
-            // Cannot rely on lastModel because VolcanoPlanner may call matches()
-            // on multiple nodes before calling onMatch(), making lastModel stale.
-            Model model = new Model(constraints);
-            if (!Match.match(sourceTemplate, queryNode, model)) {
-                log.warn("Rule[{}] onMatch re-match failed unexpectedly", ruleId);
-                return;
+            // Reuse cached Model if available (same node identity),
+            // otherwise fall back to re-matching
+            Model model;
+            if (queryNode == lastMatchedNode && lastMatchedModel != null) {
+                model = lastMatchedModel;
+            } else {
+                model = new Model(constraints);
+                if (!Match.match(sourceTemplate, queryNode, model)) {
+                    log.warn("Rule[{}] onMatch re-match failed unexpectedly", ruleId);
+                    return;
+                }
+                if (!model.checkConstraints()) {
+                    log.warn("Rule[{}] onMatch re-match constraints failed", ruleId);
+                    return;
+                }
             }
-            if (!model.checkConstraints()) {
-                log.warn("Rule[{}] onMatch re-match constraints failed", ruleId);
-                return;
-            }
+            // Clear cache
+            lastMatchedModel = null;
+            lastMatchedNode = null;
 
             RelNode rewrittenNode = Instantiation.instantiate(targetTemplate, model, constraints);
 

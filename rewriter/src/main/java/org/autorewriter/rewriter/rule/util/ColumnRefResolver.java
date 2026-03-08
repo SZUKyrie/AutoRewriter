@@ -3,6 +3,7 @@ package org.autorewriter.rewriter.rule.util;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.hep.HepRelVertex;
+import org.apache.calcite.plan.volcano.RelSubset;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
 import org.apache.calcite.rel.metadata.JaninoRelMetadataProvider;
@@ -98,8 +99,19 @@ public final class ColumnRefResolver {
     }
 
     private static RelNode unwrap(RelNode node) {
-        if (node instanceof HepRelVertex) {
-            return ((HepRelVertex) node).getCurrentRel();
+        while (node instanceof HepRelVertex || node instanceof RelSubset) {
+            if (node instanceof HepRelVertex) {
+                node = ((HepRelVertex) node).getCurrentRel();
+            } else {
+                RelNode best = ((RelSubset) node).getBest();
+                if (best != null) {
+                    node = best;
+                } else {
+                    RelNode orig = ((RelSubset) node).getOriginal();
+                    node = (orig != null) ? orig : node;
+                    break;
+                }
+            }
         }
         return node;
     }

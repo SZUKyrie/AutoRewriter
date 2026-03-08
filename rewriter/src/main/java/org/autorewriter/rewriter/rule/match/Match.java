@@ -584,15 +584,11 @@ public class Match {
         while (node instanceof HepRelVertex) {
             node = ((HepRelVertex) node).getCurrentRel();
         }
-        // For RelSubset, return the original logical node as a best-effort
-        // default. Match.match() handles full iteration when needed.
-        if (node instanceof RelSubset) {
-            RelSubset subset = (RelSubset) node;
-            RelNode original = subset.getOriginal();
-            if (original != null) {
-                return original;
-            }
-        }
+        // NOTE: RelSubset is intentionally NOT unwrapped here.
+        // Match.match() handles RelSubset by iterating all alternatives
+        // in the equivalence set, which is required for VolcanoPlanner
+        // to see rule outputs from earlier rule firings (e.g., Rule 0's
+        // InnerJoin must be visible to Rule 1's pattern matching).
         return node;
     }
 

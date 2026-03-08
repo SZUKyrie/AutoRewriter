@@ -38,7 +38,8 @@ public class CostBaseProducePipeline extends ProducePipeline {
         ProduceResult produceResult = new ProduceResult();
 
         long ruleRegStart = System.currentTimeMillis();
-        CostBaseOptimizer optimizer = new CostBaseOptimizer();
+        CostBaseOptimizer optimizer = new CostBaseOptimizer(
+                org.autorewriter.rewriter.optimize.costBaseOpt.ZeroCostFactory.INSTANCE);
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
         for (int i = 0; i < ruleContexts.size(); i++) {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);
