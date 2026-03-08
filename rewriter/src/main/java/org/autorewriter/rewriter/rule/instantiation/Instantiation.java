@@ -20,66 +20,55 @@ import java.util.List;
 
 /**
  * Constructs a target {@link RelNode} tree from a target template, a populated
- * {@link Model} (bound during matching), and {@link Constraints} that provide
- * the instantiation mapping from target-side symbols to source-side symbols.
+ * {@link Model} (bound during matching), and {@link Constraints}.
  *
- * <p>After a successful {@link Match}, the Model contains bound values for
- * source-side symbols. The Constraints provides the mapping from target-side
- * symbols to source-side symbols via {@link Constraints#instantiationOf}.
- * Instantiation walks the target template top-down, looks up each target
- * symbol's source symbol, retrieves the bound value from Model, and builds
- * new Calcite RelNode trees.
+ * <p>Aligned with WeTune's Instantiation mechanism:
+ * <ul>
+ *   <li>{@link ColumnRefRegistry} tracks output column identities per node (like WeTune's ValuesRegistry)</li>
+ *   <li>{@link #interpretAttrs} handles table swapping via positional mapping (like WeTune's interpretAttrs)</li>
+ *   <li>{@link ColumnRefRegistry#resolveIndex} resolves column identity to position (like WeTune's rebindRefs)</li>
+ * </ul>
  */
 public class Instantiation {
 
-    /**
-     * Instantiate a target template into a concrete {@link RelNode} tree using
-     * the bindings from a successful match.
-     *
-     * @param targetTemplate the target-side template RelNode tree
-     * @param model          the model populated during matching
-     * @param constraints    the constraints providing instantiation mappings
-     * @return a new RelNode tree with all placeholders resolved
-     */
-    public static RelNode instantiate(RelNode targetTemplate, Model model, Constraints constraints) {
-        return instantiateNode(targetTemplate, model, constraints);
+    private final Model model;
+    private final Constraints constraints;
+    private final ColumnRefRegistry registry;
+
+    private Instantiation(Model model, Constraints constraints) {
+        this.model = model;
+        this.constraints = constraints;
+        this.registry = new ColumnRefRegistry();
     }
 
-    private static RelNode instantiateNode(RelNode template, Model model, Constraints constraints) {
+    public static RelNode instantiate(RelNode targetTemplate, Model model, Constraints constraints) {
+        return new Instantiation(model, constraints).instantiateNode(targetTemplate);
+    }
+
+    private RelNode instantiateNode(RelNode template) {
         template = Match.unwrapHepVertex(template);
 
-        // 1. INPUT (LogicalTableScan with t\d+ placeholder)
         if (template instanceof LogicalTableScan) {
-            return instantiateInput((LogicalTableScan) template, model, constraints);
+            return instantiateInput((LogicalTableScan) template);
         }
-
-        // 2. PROJ (LogicalProject)
         if (template instanceof LogicalProject) {
-            return instantiateProject((LogicalProject) template, model, constraints);
+            return instantiateProject((LogicalProject) template);
         }
-
-        // 3. FILTER (LogicalFilter) - could be simple or InSubFilter
         if (template instanceof LogicalFilter) {
-            return instantiateFilter((LogicalFilter) template, model, constraints);
+            return instantiateFilter((LogicalFilter) template);
         }
-
-        // 4. JOIN (LogicalJoin)
         if (template instanceof LogicalJoin) {
-            return instantiateJoin((LogicalJoin) template, model, constraints);
+            return instantiateJoin((LogicalJoin) template);
         }
-
-        // 5. AGG / DISTINCT (LogicalAggregate)
         if (template instanceof LogicalAggregate) {
-            return instantiateAggregate((LogicalAggregate) template, model, constraints);
+            return instantiateAggregate((LogicalAggregate) template);
         }
-
-        // Fallback: return template as-is
         return template;
     }
 
     // ── INPUT ──────────────────────────────────────────────────────────────
 
-    private static RelNode instantiateInput(LogicalTableScan template, Model model, Constraints constraints) {
+    private RelNode instantiateInput(LogicalTableScan template) {
         String tableName = getTableName(template);
         if (SymbolKind.isSymbolName(tableName) && tableName.charAt(0) == 't') {
             Symbol targetSym = Symbol.of(tableName);
@@ -88,7 +77,6 @@ public class Instantiation {
                 RelNode bound = model.ofTable(sourceSym);
                 if (bound != null) return bound;
             }
-            // If no instantiation mapping, try direct lookup
             RelNode direct = model.ofTable(targetSym);
             if (direct != null) return direct;
         }
@@ -97,11 +85,10 @@ public class Instantiation {
 
     // ── PROJ ───────────────────────────────────────────────────────────────
 
-    private static RelNode instantiateProject(LogicalProject template, Model model, Constraints constraints) {
-        // Recursively instantiate child
-        RelNode child = instantiateNode(template.getInput(), model, constraints);
+    private RelNode instantiateProject(LogicalProject template) {
+        RelNode child = instantiateNode(template.getInput());
 
-        // Find attrs and schema placeholders in template field names
+        // Find attrs and schema placeholders
         List<String> templateFields = template.getRowType().getFieldNames();
         String attrsPlaceholder = null;
         String schemaPlaceholder = null;
@@ -112,88 +99,47 @@ public class Instantiation {
             }
         }
 
-        // Resolve source attrs and schema via instantiation mapping
+        // Use interpretAttrs for correct table-swap-aware resolution
         List<ColumnRef> columnRefs = null;
         if (attrsPlaceholder != null) {
-            Symbol targetAttrsSym = Symbol.of(attrsPlaceholder);
-            Symbol sourceAttrsSym = constraints.instantiationOf(targetAttrsSym);
-            if (sourceAttrsSym != null) {
-                columnRefs = model.ofAttrs(sourceAttrsSym);
-            }
-            if (columnRefs == null) {
-                columnRefs = model.ofAttrs(targetAttrsSym);
-            }
+            columnRefs = interpretAttrs(Symbol.of(attrsPlaceholder));
         }
 
         RelDataType schema = null;
         if (schemaPlaceholder != null) {
             Symbol targetSchemaSym = Symbol.of(schemaPlaceholder);
             Symbol sourceSchemaSym = constraints.instantiationOf(targetSchemaSym);
-            if (sourceSchemaSym != null) {
-                schema = model.ofSchema(sourceSchemaSym);
-            }
-            if (schema == null) {
-                schema = model.ofSchema(targetSchemaSym);
-            }
+            schema = sourceSchemaSym != null ? model.ofSchema(sourceSchemaSym) : model.ofSchema(targetSchemaSym);
         }
 
         if (columnRefs == null || columnRefs.isEmpty()) {
-            // No bindings found - return child with identity projection
             return child;
         }
 
-        // Try to get stored projection RexNodes
-        String sourceAttrsName = attrsPlaceholder;
-        Symbol targetAttrsSym = Symbol.of(attrsPlaceholder);
-        Symbol sourceAttrsSym = constraints.instantiationOf(targetAttrsSym);
-        if (sourceAttrsSym != null) {
-            sourceAttrsName = sourceAttrsSym.name();
-        }
-
-        @SuppressWarnings("unchecked")
-        List<RexNode> storedProjects = (List<RexNode>) model.ofExtra(sourceAttrsName + "_projects");
-
-        // Build projection expressions
+        // Build projections using registry-based resolution
         RexBuilder rexBuilder = child.getCluster().getRexBuilder();
         List<RexNode> projects = new ArrayList<>();
         List<String> fieldNames = new ArrayList<>();
 
-        if (storedProjects != null && storedProjects.size() == columnRefs.size()) {
-            // Use stored projections, but rebind RexInputRef indices to new child
-            for (int i = 0; i < storedProjects.size(); i++) {
-                RexNode storedProject = storedProjects.get(i);
-                RexNode rebound = rebindRexNode(storedProject, columnRefs.get(i), child, rexBuilder);
-                projects.add(rebound);
-            }
-        } else {
-            // Build simple RexInputRef projections from ColumnRefs
-            for (ColumnRef ref : columnRefs) {
-                int idx = ColumnRefResolver.resolveIndex(ref, child);
-                if (idx >= 0) {
-                    RelDataType fieldType = child.getRowType().getFieldList().get(idx).getType();
-                    projects.add(rexBuilder.makeInputRef(fieldType, idx));
+        for (ColumnRef ref : columnRefs) {
+            int idx = registry.resolveIndex(ref, child);
+            if (idx >= 0) {
+                RelDataType fieldType = child.getRowType().getFieldList().get(idx).getType();
+                projects.add(rexBuilder.makeInputRef(fieldType, idx));
+            } else {
+                // Fallback: try name matching on child's field names
+                int nameIdx = findFieldByName(child, ref.getColumnName());
+                if (nameIdx >= 0) {
+                    RelDataType fieldType = child.getRowType().getFieldList().get(nameIdx).getType();
+                    projects.add(rexBuilder.makeInputRef(fieldType, nameIdx));
                 } else {
-                    // Column not found - try by name only
-                    List<String> childFields = child.getRowType().getFieldNames();
-                    boolean found = false;
-                    for (int j = 0; j < childFields.size(); j++) {
-                        if (childFields.get(j).equalsIgnoreCase(ref.getColumnName())) {
-                            RelDataType fieldType = child.getRowType().getFieldList().get(j).getType();
-                            projects.add(rexBuilder.makeInputRef(fieldType, j));
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        // Last resort: use first field
-                        projects.add(rexBuilder.makeInputRef(
-                                child.getRowType().getFieldList().get(0).getType(), 0));
-                    }
+                    projects.add(rexBuilder.makeInputRef(
+                            child.getRowType().getFieldList().get(0).getType(), 0));
                 }
             }
         }
 
-        // Build field names from schema or column refs
+        // Build field names
         if (schema != null) {
             fieldNames = new ArrayList<>(schema.getFieldNames());
         } else {
@@ -201,58 +147,36 @@ public class Instantiation {
                 fieldNames.add(ref.getColumnName());
             }
         }
-
-        // Ensure field names list matches projects list size
-        while (fieldNames.size() < projects.size()) {
-            fieldNames.add("col" + fieldNames.size());
-        }
-        if (fieldNames.size() > projects.size()) {
-            fieldNames = new ArrayList<>(fieldNames.subList(0, projects.size()));
-        }
+        while (fieldNames.size() < projects.size()) fieldNames.add("col" + fieldNames.size());
+        if (fieldNames.size() > projects.size()) fieldNames = new ArrayList<>(fieldNames.subList(0, projects.size()));
 
         return LogicalProject.create(child, Collections.emptyList(), projects, fieldNames);
     }
 
     // ── FILTER ─────────────────────────────────────────────────────────────
 
-    private static RelNode instantiateFilter(LogicalFilter template, Model model, Constraints constraints) {
-        // Check if InSubFilter
+    private RelNode instantiateFilter(LogicalFilter template) {
         if (hasRexSubQuery(template.getCondition())) {
-            return instantiateInSubFilter(template, model, constraints);
+            return instantiateInSubFilter(template);
         }
 
-        // Simple filter
-        RelNode child = instantiateNode(template.getInput(), model, constraints);
-
-        // Get the predicate from model
-        RexNode condition = instantiateRexNode(template.getCondition(), child, model, constraints);
-
-        if (condition == null) {
-            condition = template.getCondition();
-        }
+        RelNode child = instantiateNode(template.getInput());
+        RexNode condition = instantiateRexNode(template.getCondition(), child);
+        if (condition == null) condition = template.getCondition();
 
         return LogicalFilter.create(child, condition);
     }
 
-    private static RelNode instantiateInSubFilter(LogicalFilter template, Model model, Constraints constraints) {
-        // Instantiate main input
-        RelNode child = instantiateNode(template.getInput(), model, constraints);
+    private RelNode instantiateInSubFilter(LogicalFilter template) {
+        RelNode child = instantiateNode(template.getInput());
+        RexNode condition = instantiateRexNode(template.getCondition(), child);
+        if (condition == null) condition = template.getCondition();
 
-        // The subquery is inside the condition - instantiate it
-        RexNode condition = instantiateRexNode(template.getCondition(), child, model, constraints);
-        if (condition == null) {
-            condition = template.getCondition();
-        }
-
-        // If the condition is an IN RexSubQuery, produce LogicalInSubFilter
-        // instead of LogicalFilter(IN RexSubQuery). This keeps the plan consistent
-        // with the InSubFilterExpander preprocessing — otherwise subsequent rules
-        // expecting LogicalInSubFilter cannot match the rewritten plan.
+        // Produce LogicalInSubFilter to keep plan consistent with InSubFilterExpander
         RexSubQuery inSub = findInSubQuery(condition);
         if (inSub != null) {
             RexNode lhsRef = inSub.getOperands().get(0);
             LogicalInSubFilter inSubFilter = LogicalInSubFilter.create(child, inSub.rel, lhsRef);
-            // If there are remaining conditions (AND with other predicates), wrap in Filter
             List<RexNode> remaining = removeSubQuery(condition, inSub);
             if (!remaining.isEmpty()) {
                 RexNode remainingCond = RexUtil.composeConjunction(
@@ -261,34 +185,59 @@ public class Instantiation {
             }
             return inSubFilter;
         }
-
         return LogicalFilter.create(child, condition);
     }
 
     // ── JOIN ───────────────────────────────────────────────────────────────
 
-    private static RelNode instantiateJoin(LogicalJoin template, Model model, Constraints constraints) {
-        RelNode left = instantiateNode(template.getLeft(), model, constraints);
-        RelNode right = instantiateNode(template.getRight(), model, constraints);
+    private RelNode instantiateJoin(LogicalJoin template) {
+        RelNode left = instantiateNode(template.getLeft());
+        RelNode right = instantiateNode(template.getRight());
 
-        // Rebuild join condition
-        RexNode condition = rebuildJoinCondition(template, left, right, model, constraints);
+        // Wrap non-trivial join inputs with identity projections (WeTune NormalizeProj).
+        // This establishes clean column namespaces for each join side, which:
+        // 1. Enables correct column disambiguation in self-joins (same-name columns)
+        // 2. Allows RelToSqlConverter to generate proper derived table aliases
+        // 3. Creates a stable column identity layer for ColumnRefRegistry resolution
+        left = wrapWithIdentityProjectIfNeeded(left);
+        right = wrapWithIdentityProjectIfNeeded(right);
+
+        // Rebuild join condition using interpretAttrs + registry
+        RexNode condition = rebuildJoinCondition(template, left, right);
 
         return LogicalJoin.create(left, right, Collections.emptyList(), condition,
                 Collections.emptySet(), template.getJoinType());
     }
 
-    private static RexNode rebuildJoinCondition(LogicalJoin template, RelNode left, RelNode right,
-                                                Model model, Constraints constraints) {
+    /**
+     * Wraps a RelNode with an identity LogicalProject if it is not a simple
+     * LogicalTableScan. Aligned with WeTune's {@code NormalizeProj.insertProjBefore()}
+     * which wraps Filter/Join nodes that are direct children of a Join with a
+     * qualifying Proj that projects all columns through.
+     */
+    private static RelNode wrapWithIdentityProjectIfNeeded(RelNode node) {
+        if (node instanceof LogicalTableScan) {
+            return node; // TableScan already has a clean namespace
+        }
+        RexBuilder rexBuilder = node.getCluster().getRexBuilder();
+        RelDataType rowType = node.getRowType();
+        List<RexNode> projects = new ArrayList<>();
+        List<String> fieldNames = new ArrayList<>();
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            RelDataTypeField field = rowType.getFieldList().get(i);
+            projects.add(rexBuilder.makeInputRef(field.getType(), i));
+            fieldNames.add(field.getName());
+        }
+        return LogicalProject.create(node, Collections.emptyList(), projects, fieldNames);
+    }
+
+    private RexNode rebuildJoinCondition(LogicalJoin template, RelNode left, RelNode right) {
         RexNode templateCond = template.getCondition();
         int tLeftFieldCount = template.getLeft().getRowType().getFieldCount();
-
-        // Extract join key pairs from template condition
         List<int[]> templatePairs = extractJoinKeyPairs(templateCond, tLeftFieldCount);
 
         if (templatePairs.isEmpty()) {
-            // Try to instantiate the condition directly
-            RexNode inst = instantiateRexNode(templateCond, null, model, constraints);
+            RexNode inst = instantiateRexNode(templateCond, null);
             return inst != null ? inst : templateCond;
         }
 
@@ -299,7 +248,6 @@ public class Instantiation {
             int tLeftIdx = tPair[0];
             int tRightIdx = tPair[1] - tLeftFieldCount;
 
-            // Get placeholder names
             List<String> tLeftFields = template.getLeft().getRowType().getFieldNames();
             List<String> tRightFields = template.getRight().getRowType().getFieldNames();
 
@@ -309,23 +257,19 @@ public class Instantiation {
             int newLeftIdx = -1;
             int newRightIdx = -1;
 
-            // Resolve left join key
+            // Resolve left join key using interpretAttrs + registry
             if (leftField != null && SymbolKind.isSymbolName(leftField)) {
-                Symbol targetSym = Symbol.of(leftField);
-                Symbol sourceSym = constraints.instantiationOf(targetSym);
-                List<ColumnRef> refs = sourceSym != null ? model.ofAttrs(sourceSym) : model.ofAttrs(targetSym);
+                List<ColumnRef> refs = interpretAttrs(Symbol.of(leftField));
                 if (refs != null && !refs.isEmpty()) {
-                    newLeftIdx = ColumnRefResolver.resolveIndex(refs.get(0), left);
+                    newLeftIdx = registry.resolveIndex(refs.get(0), left);
                 }
             }
 
-            // Resolve right join key
+            // Resolve right join key using interpretAttrs + registry
             if (rightField != null && SymbolKind.isSymbolName(rightField)) {
-                Symbol targetSym = Symbol.of(rightField);
-                Symbol sourceSym = constraints.instantiationOf(targetSym);
-                List<ColumnRef> refs = sourceSym != null ? model.ofAttrs(sourceSym) : model.ofAttrs(targetSym);
+                List<ColumnRef> refs = interpretAttrs(Symbol.of(rightField));
                 if (refs != null && !refs.isEmpty()) {
-                    newRightIdx = ColumnRefResolver.resolveIndex(refs.get(0), right);
+                    newRightIdx = registry.resolveIndex(refs.get(0), right);
                 }
             }
 
@@ -341,34 +285,26 @@ public class Instantiation {
             }
         }
 
-        if (equalities.isEmpty()) {
-            return rexBuilder.makeLiteral(true);
-        }
-        if (equalities.size() == 1) {
-            return equalities.get(0);
-        }
+        if (equalities.isEmpty()) return rexBuilder.makeLiteral(true);
+        if (equalities.size() == 1) return equalities.get(0);
         return rexBuilder.makeCall(SqlStdOperatorTable.AND, equalities);
     }
 
     // ── AGGREGATE ──────────────────────────────────────────────────────────
 
-    private static RelNode instantiateAggregate(LogicalAggregate template, Model model, Constraints constraints) {
-        RelNode child = instantiateNode(template.getInput(), model, constraints);
+    private RelNode instantiateAggregate(LogicalAggregate template) {
+        RelNode child = instantiateNode(template.getInput());
 
-        // Resolve group-by attrs
         List<String> templateFields = template.getRowType().getFieldNames();
         ImmutableBitSet groupSet = template.getGroupSet();
 
-        // If template has placeholder attrs, resolve them
         for (String field : templateFields) {
             if (SymbolKind.isSymbolName(field) && field.charAt(0) == 'a') {
-                Symbol targetSym = Symbol.of(field);
-                Symbol sourceSym = constraints.instantiationOf(targetSym);
-                List<ColumnRef> refs = sourceSym != null ? model.ofAttrs(sourceSym) : model.ofAttrs(targetSym);
+                List<ColumnRef> refs = interpretAttrs(Symbol.of(field));
                 if (refs != null) {
                     ImmutableBitSet.Builder builder = ImmutableBitSet.builder();
                     for (ColumnRef ref : refs) {
-                        int idx = ColumnRefResolver.resolveIndex(ref, child);
+                        int idx = registry.resolveIndex(ref, child);
                         if (idx >= 0) builder.set(idx);
                     }
                     groupSet = builder.build();
@@ -381,20 +317,70 @@ public class Instantiation {
                 null, template.getAggCallList());
     }
 
+    // ── interpretAttrs (WeTune-aligned) ────────────────────────────────────
+
+    /**
+     * Resolve a target attrs symbol to concrete ColumnRefs, handling table swapping.
+     * This is the equivalent of WeTune's {@code Instantiation.interpretAttrs()}.
+     *
+     * <p>When a rule swaps tables (e.g., target has {@code InnerJoin(t2=t1, t3=t0)}),
+     * the attrs from the source side may need to be mapped positionally from the
+     * nominal source table to the actual source table.
+     */
+    private List<ColumnRef> interpretAttrs(Symbol targetAttrs) {
+        Symbol sourceAttrs = constraints.instantiationOf(targetAttrs);
+        if (sourceAttrs == null) sourceAttrs = targetAttrs;
+
+        List<ColumnRef> nominalRefs = model.ofAttrs(sourceAttrs);
+        if (nominalRefs == null) return null;
+
+        // Find the table that this target attrs belongs to (via AttrsSub constraint)
+        Symbol actualSourceTable = constraints.sourceOf(targetAttrs);
+        Symbol nominalSourceTable = constraints.sourceOf(sourceAttrs);
+
+        if (actualSourceTable == null || nominalSourceTable == null) {
+            return nominalRefs;  // no AttrsSub info, return as-is
+        }
+
+        // Resolve table symbols to their bound nodes
+        Symbol actualTableInstantiated = constraints.instantiationOf(actualSourceTable);
+        if (actualTableInstantiated == null) actualTableInstantiated = actualSourceTable;
+
+        // Check if the actual and nominal source tables map to the same node
+        RelNode actualNode = model.ofTable(actualTableInstantiated);
+        RelNode nominalNode = model.ofTable(nominalSourceTable);
+
+        if (actualNode == null || nominalNode == null || actualNode == nominalNode) {
+            return nominalRefs;  // same table or can't resolve, no mapping needed
+        }
+
+        // Table swap detected: map columns positionally from nominal to actual
+        List<ColumnRef> actualCols = registry.outputColumnsOf(actualNode);
+        List<ColumnRef> nominalCols = registry.outputColumnsOf(nominalNode);
+
+        List<ColumnRef> result = new ArrayList<>();
+        for (ColumnRef nominal : nominalRefs) {
+            int idx = nominalCols.indexOf(nominal);
+            if (idx >= 0 && idx < actualCols.size()) {
+                result.add(actualCols.get(idx));
+            } else {
+                result.add(nominal);  // fallback
+            }
+        }
+        return result;
+    }
+
     // ── RexNode instantiation ──────────────────────────────────────────────
 
-    private static RexNode instantiateRexNode(RexNode template, RelNode context,
-                                              Model model, Constraints constraints) {
+    private RexNode instantiateRexNode(RexNode template, RelNode context) {
         if (template instanceof RexSubQuery) {
             RexSubQuery sub = (RexSubQuery) template;
-            RelNode newRel = instantiateNode(sub.rel, model, constraints);
-            // Rebuild operands with correct types from the context (filter input)
+            RelNode newRel = instantiateNode(sub.rel);
             List<RexNode> newOperands = new ArrayList<>();
             for (RexNode operand : sub.getOperands()) {
-                RexNode inst = instantiateRexNode(operand, context, model, constraints);
+                RexNode inst = instantiateRexNode(operand, context);
                 newOperands.add(inst != null ? inst : operand);
             }
-            // Always rebuild with both new rel and new operands
             return sub.clone(newRel).clone(sub.getType(), newOperands);
         }
 
@@ -408,10 +394,6 @@ public class Instantiation {
                 Symbol sourceSym = constraints.instantiationOf(targetSym);
                 RexNode bound = sourceSym != null ? model.ofPred(sourceSym) : model.ofPred(targetSym);
                 if (bound != null) {
-                    // Rebind RexInputRef indices: the predicate was captured from a
-                    // source context (e.g., Filter over t1) but may now be placed in a
-                    // different context (e.g., Filter over InnerJoin(t0, t1)) where
-                    // column positions have changed.
                     String predName = (sourceSym != null ? sourceSym : targetSym).name();
                     RelNode sourceContext = (RelNode) model.ofExtra(predName + "_context");
                     if (sourceContext != null && context != null) {
@@ -425,7 +407,7 @@ public class Instantiation {
             List<RexNode> newOperands = new ArrayList<>();
             boolean changed = false;
             for (RexNode operand : call.getOperands()) {
-                RexNode inst = instantiateRexNode(operand, context, model, constraints);
+                RexNode inst = instantiateRexNode(operand, context);
                 if (inst != null && inst != operand) {
                     newOperands.add(inst);
                     changed = true;
@@ -433,15 +415,11 @@ public class Instantiation {
                     newOperands.add(operand);
                 }
             }
-            if (changed) {
-                return call.clone(call.getType(), newOperands);
-            }
+            if (changed) return call.clone(call.getType(), newOperands);
             return call;
         }
 
-        // RexInputRef: rebind to the context node's column type
-        // (template placeholder types like JavaType(String) must be replaced
-        // with the actual column type from the instantiated child)
+        // RexInputRef: rebind type from context
         if (template instanceof RexInputRef && context != null) {
             RexInputRef ref = (RexInputRef) template;
             int idx = ref.getIndex();
@@ -457,31 +435,27 @@ public class Instantiation {
     }
 
     /**
-     * Rebind all RexInputRef nodes in a predicate from old column indices
-     * (relative to sourceCtx) to new indices (relative to targetCtx).
-     * Uses ColumnRefResolver to map: oldIndex → ColumnRef → newIndex.
-     *
-     * This is needed when a predicate captured from one context (e.g., Filter
-     * over t1) is placed in a different context (e.g., Filter over Join(t0, t1))
-     * where column positions have shifted.
+     * Rebind predicate RexInputRef indices from source context to target context
+     * using the ColumnRefRegistry.
      */
-    private static RexNode rebindPredicateRefs(RexNode expr, RelNode sourceCtx, RelNode targetCtx) {
+    private RexNode rebindPredicateRefs(RexNode expr, RelNode sourceCtx, RelNode targetCtx) {
         if (expr instanceof RexInputRef) {
             int oldIdx = ((RexInputRef) expr).getIndex();
-            ColumnRef ref = ColumnRefResolver.resolve(oldIdx, sourceCtx);
-            int newIdx = ColumnRefResolver.resolveIndex(ref, targetCtx);
-            if (newIdx >= 0) {
-                RexBuilder rexBuilder = targetCtx.getCluster().getRexBuilder();
-                RelDataType newType = targetCtx.getRowType().getFieldList().get(newIdx).getType();
-                return rexBuilder.makeInputRef(newType, newIdx);
+            // Use registry for consistent resolution
+            List<ColumnRef> sourceCols = registry.outputColumnsOf(sourceCtx);
+            if (oldIdx < sourceCols.size()) {
+                ColumnRef ref = sourceCols.get(oldIdx);
+                int newIdx = registry.resolveIndex(ref, targetCtx);
+                if (newIdx >= 0) {
+                    RexBuilder rexBuilder = targetCtx.getCluster().getRexBuilder();
+                    RelDataType newType = targetCtx.getRowType().getFieldList().get(newIdx).getType();
+                    return rexBuilder.makeInputRef(newType, newIdx);
+                }
             }
             return expr;
         }
-        // Skip RexSubQuery: its operands reference the subquery's own context
-        // (the filter's LHS), not the plan structure being transformed.
-        // Rebinding them would produce wrong column indices.
         if (expr instanceof RexSubQuery) {
-            return expr;
+            return expr;  // subquery operands reference their own context
         }
         if (expr instanceof RexCall) {
             RexCall call = (RexCall) expr;
@@ -497,31 +471,19 @@ public class Instantiation {
         return expr;
     }
 
-    // Rebind a single stored projection RexNode to a new child
-    private static RexNode rebindRexNode(RexNode expr, ColumnRef ref, RelNode child, RexBuilder rexBuilder) {
-        if (expr instanceof RexInputRef) {
-            int idx = ColumnRefResolver.resolveIndex(ref, child);
-            if (idx >= 0) {
-                RelDataType fieldType = child.getRowType().getFieldList().get(idx).getType();
-                return rexBuilder.makeInputRef(fieldType, idx);
-            }
-            // Fallback: try name matching
-            List<String> fieldNames = child.getRowType().getFieldNames();
-            for (int i = 0; i < fieldNames.size(); i++) {
-                if (fieldNames.get(i).equalsIgnoreCase(ref.getColumnName())) {
-                    RelDataType fieldType = child.getRowType().getFieldList().get(i).getType();
-                    return rexBuilder.makeInputRef(fieldType, i);
-                }
-            }
-        }
-        return expr;
-    }
-
     // ── Utilities ──────────────────────────────────────────────────────────
 
     private static String getTableName(LogicalTableScan scan) {
         List<String> names = scan.getTable().getQualifiedName();
         return names.get(names.size() - 1);
+    }
+
+    private static int findFieldByName(RelNode node, String name) {
+        List<String> fields = node.getRowType().getFieldNames();
+        for (int i = 0; i < fields.size(); i++) {
+            if (fields.get(i).equalsIgnoreCase(name)) return i;
+        }
+        return -1;
     }
 
     private static boolean hasRexSubQuery(RexNode node) {
@@ -534,7 +496,6 @@ public class Instantiation {
         return false;
     }
 
-    /** Find the first IN RexSubQuery in a condition (may be nested in AND). */
     private static RexSubQuery findInSubQuery(RexNode condition) {
         if (condition instanceof RexSubQuery) {
             RexSubQuery sub = (RexSubQuery) condition;
@@ -549,15 +510,11 @@ public class Instantiation {
         return null;
     }
 
-    /** Remove a specific RexSubQuery from a conjunction, returning remaining terms. */
     private static List<RexNode> removeSubQuery(RexNode condition, RexSubQuery target) {
-        List<RexNode> conjunctions = RexUtil.flattenAnd(
-                Collections.singletonList(condition));
+        List<RexNode> conjunctions = RexUtil.flattenAnd(Collections.singletonList(condition));
         List<RexNode> remaining = new ArrayList<>();
         for (RexNode conj : conjunctions) {
-            if (conj != target) {
-                remaining.add(conj);
-            }
+            if (conj != target) remaining.add(conj);
         }
         return remaining;
     }
