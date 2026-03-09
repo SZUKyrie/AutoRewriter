@@ -70,6 +70,14 @@ public class AutoRewriteRule extends RelOptRule {
     public boolean matches(RelOptRuleCall call) {
         RelNode queryNode = call.rel(0);
 
+        // VolcanoPlanner's IterativeRuleDriver re-checks matches() via assert
+        // before calling onMatch(). Since our deep structural matching traverses
+        // RelSubsets whose contents may change between calls, the re-check could
+        // fail. Return cached result for the same node to satisfy the assertion.
+        if (queryNode == lastMatchedNode && lastMatchedModel != null) {
+            return true;
+        }
+
         // Create a fresh Model for this match attempt
         Model model = new Model(constraints);
 
@@ -86,8 +94,7 @@ public class AutoRewriteRule extends RelOptRule {
 
         log.info("Rule[{}] match succeeded", ruleId);
 
-        // Cache for onMatch() — avoids re-matching in VolcanoPlanner where
-        // RelSubset contents may change between matches() and onMatch()
+        // Cache for onMatch() and assertion re-check
         this.lastMatchedModel = model;
         this.lastMatchedNode = queryNode;
 

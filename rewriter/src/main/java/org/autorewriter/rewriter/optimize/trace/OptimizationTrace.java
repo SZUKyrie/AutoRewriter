@@ -222,5 +222,89 @@ public class OptimizationTrace {
     public void exportTreePng(String outputPath) throws IOException {
         TraceTreeVisualizer.exportToPng(this, outputPath);
     }
+
+    // ── End-to-end derivation chains ────────────────────────────────────
+
+    /**
+     * Build end-to-end derivation chains for AutoRewriteRule firings.
+     *
+     * <p>Inspired by WeTune's {@code traceStep/collectTrace0}: each chain is a
+     * temporally-ordered sequence of distinct AutoRewriteRule firings.
+     * All valid ordered subsets are enumerated, representing different combinations
+     * of rules that could form an optimization path.
+     *
+     * <p>Example output:
+     * <pre>
+     * === AutoRewrite Derivation Chains (2 distinct rules fired) ===
+     *
+     * Chain 0: [baseline] no AutoRewriteRule applied
+     * Chain 1: AutoRewriteRule_0
+     * Chain 2: AutoRewriteRule_0 → AutoRewriteRule_1
+     * </pre>
+     */
+    public String derivationChains() {
+        // 1. Collect AutoRewriteRule firings, deduplicate by rule identity
+        Map<String, RuleApplicationStep> ruleStepMap = new LinkedHashMap<>();
+        for (RuleApplicationStep step : steps) {
+            if (step.getRule() instanceof org.autorewriter.rewriter.rule.AutoRewriteRule) {
+                ruleStepMap.putIfAbsent(step.getRule().toString(), step);
+            }
+        }
+        List<RuleApplicationStep> distinctSteps = new ArrayList<>(ruleStepMap.values());
+
+        if (distinctSteps.isEmpty()) {
+            return "=== AutoRewrite Derivation Chains ===\n\nNo AutoRewriteRule fired.\n";
+        }
+
+        // 2. Enumerate all ordered subsets (temporal order = dependency order)
+        List<List<Integer>> chains = new ArrayList<>();
+        chains.add(new ArrayList<>()); // Chain 0: baseline
+        enumerateOrderedSubsets(distinctSteps.size(), 0, new ArrayList<>(), chains);
+
+        // 3. Format
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== AutoRewrite Derivation Chains (")
+                .append(distinctSteps.size()).append(" distinct rules fired) ===\n");
+
+        for (int i = 0; i < chains.size(); i++) {
+            List<Integer> chain = chains.get(i);
+            sb.append("\n--- Chain ").append(i).append(": ");
+            if (chain.isEmpty()) {
+                sb.append("[baseline] no AutoRewriteRule applied ---\n");
+                continue;
+            }
+            StringJoiner names = new StringJoiner(" → ");
+            for (int idx : chain) names.add(distinctSteps.get(idx).getRule().toString());
+            sb.append(names).append(" ---\n");
+
+            for (int j = 0; j < chain.size(); j++) {
+                RuleApplicationStep step = distinctSteps.get(chain.get(j));
+                sb.append("  Step ").append(j + 1).append(": ").append(step).append("\n");
+            }
+
+            RuleApplicationStep lastStep = distinctSteps.get(chain.get(chain.size() - 1));
+            sb.append("  [Result Plan]\n");
+            for (String line : lastStep.getProducedRelNode().explain().split("\n")) {
+                sb.append("    ").append(line).append("\n");
+            }
+            // SQL uses FilterMerger to produce clean output (merged WHERE clauses)
+            // while [Result Plan] keeps the raw structure for debugging
+            RelNode mergedForSql = org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterMerger
+                    .merge(lastStep.getProducedRelNode());
+            String sql = tryRelNodeToSql(mergedForSql);
+            if (sql != null) sb.append("  [Result SQL] ").append(sql).append("\n");
+        }
+        return sb.toString();
+    }
+
+    private void enumerateOrderedSubsets(int n, int start, List<Integer> current, List<List<Integer>> result) {
+        if (start >= n) return;
+        for (int i = start; i < n; i++) {
+            current.add(i);
+            result.add(new ArrayList<>(current));
+            enumerateOrderedSubsets(n, i + 1, current, result);
+            current.remove(current.size() - 1);
+        }
+    }
 }
 

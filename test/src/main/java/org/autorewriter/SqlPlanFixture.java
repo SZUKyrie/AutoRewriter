@@ -229,7 +229,7 @@ public class SqlPlanFixture {
         try (Connection conn = DriverManager.getConnection(url, "postgres", "postgres")) {
             try (Statement statement = conn.createStatement()) {
                 for (String createTableSQL : createTableSQLs) {
-                    log.info("create table with sql:\n {}", createTableSQL);
+                    //log.info("create table with sql:\n {}", createTableSQL);
                     statement.execute(createTableSQL);
                     successCount ++;
                 }

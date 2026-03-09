@@ -41,12 +41,15 @@ public class Match {
      * Returns true if matching succeeds.
      */
     public static boolean match(RelNode template, RelNode query, Model model) {
-        query = unwrapHepVertex(query);
+        // Unwrap HepRelVertex only (NOT RelSubset — handled below)
+        while (query instanceof HepRelVertex) {
+            query = ((HepRelVertex) query).getCurrentRel();
+        }
 
         // Handle VolcanoPlanner's RelSubset: try matching against each alternative
-        // in the equivalence set. A RelSubset may contain multiple equivalent nodes
-        // (e.g., LogicalInSubFilter AND LogicalFilter(IN)), and we need to find one
-        // that structurally matches the template.
+        // in the equivalence set. This is critical for rule chaining — e.g., Rule 1
+        // must see Rule 0's output (InnerJoin) which is a different alternative in
+        // the same RelSubset as the original InSubFilter.
         if (query instanceof RelSubset) {
             RelSubset subset = (RelSubset) query;
             for (RelNode rel : subset.getRels()) {
@@ -584,11 +587,16 @@ public class Match {
         while (node instanceof HepRelVertex) {
             node = ((HepRelVertex) node).getCurrentRel();
         }
-        // NOTE: RelSubset is intentionally NOT unwrapped here.
-        // Match.match() handles RelSubset by iterating all alternatives
-        // in the equivalence set, which is required for VolcanoPlanner
-        // to see rule outputs from earlier rule firings (e.g., Rule 0's
-        // InnerJoin must be visible to Rule 1's pattern matching).
+        // For RelSubset, return the original logical node as a best-effort
+        // default for non-match call sites (matchProject, matchJoin, etc.).
+        // Match.match() handles full iteration BEFORE calling this method.
+        if (node instanceof RelSubset) {
+            RelSubset subset = (RelSubset) node;
+            RelNode original = subset.getOriginal();
+            if (original != null) {
+                return original;
+            }
+        }
         return node;
     }
 

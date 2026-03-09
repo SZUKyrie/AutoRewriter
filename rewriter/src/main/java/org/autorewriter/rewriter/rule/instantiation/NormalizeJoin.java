@@ -247,6 +247,13 @@ public class NormalizeJoin {
         while (node instanceof HepRelVertex) {
             node = ((HepRelVertex) node).getCurrentRel();
         }
+        // Handle VolcanoPlanner's RelSubset
+        if (node instanceof org.apache.calcite.plan.volcano.RelSubset) {
+            org.apache.calcite.plan.volcano.RelSubset subset =
+                    (org.apache.calcite.plan.volcano.RelSubset) node;
+            RelNode original = subset.getOriginal();
+            if (original != null) return original;
+        }
         return node;
     }
 

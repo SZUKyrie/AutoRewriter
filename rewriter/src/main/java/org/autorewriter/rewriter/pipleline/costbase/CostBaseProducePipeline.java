@@ -38,8 +38,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
         ProduceResult produceResult = new ProduceResult();
 
         long ruleRegStart = System.currentTimeMillis();
-        CostBaseOptimizer optimizer = new CostBaseOptimizer(
-                org.autorewriter.rewriter.optimize.costBaseOpt.ZeroCostFactory.INSTANCE);
+        CostBaseOptimizer optimizer = new CostBaseOptimizer();
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
         for (int i = 0; i < ruleContexts.size(); i++) {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);
@@ -117,7 +116,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
                 optimizeResult.setOptimizationTimeInMs(optimizationTimeInMs);
                 optimizeResult.setOriginalRelNode(relNode);
             } else {
-                log.info("query {} is optimized by CBO.\n{}", historicalSqlRecord.getQueryId(), trace.pathSummary());
+                log.info("query {} is optimized by CBO.\n{}", historicalSqlRecord.getQueryId(), trace.derivationChains());
                 log.info("optimized plan:\n{}", optimizedRelNode.explain());
                 log.info("optimized query:\n {}", relNodeToSql(optimizedRelNode));
                 optimizeResult.setRewritten(true);
