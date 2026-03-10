@@ -210,9 +210,27 @@ public class Model {
         return a0.equals(a1);
     }
 
+    /**
+     * Check predicate compatibility for PredicateEq constraint.
+     *
+     * <p>Aligned with WeTune's approach: column references are replaced with placeholders
+     * before comparison, so that structurally identical predicates with different column
+     * indices (e.g., {@code =($0, 488)} vs {@code =($5, 488)}) are considered equal.
+     * WeTune uses {@code Expression.template()} which replaces all column refs with
+     * {@code #.#}; we achieve the same effect by stripping RexInputRef indices.
+     */
     private boolean checkPredCompatible(Object v0, Object v1) {
         if (!(v0 instanceof RexNode) || !(v1 instanceof RexNode)) return false;
-        return v0.toString().equals(v1.toString());
+        return normalizePredicate((RexNode) v0).equals(normalizePredicate((RexNode) v1));
+    }
+
+    /**
+     * Normalize a predicate RexNode for equality comparison by replacing all
+     * {@link org.apache.calcite.rex.RexInputRef} indices with a placeholder {@code #}.
+     * This mirrors WeTune's {@code Expression.template()} which uses {@code #.#}.
+     */
+    private static String normalizePredicate(RexNode node) {
+        return node.toString().replaceAll("\\$\\d+", "\\#");
     }
 
     private boolean checkConstraint(Constraint c) {
