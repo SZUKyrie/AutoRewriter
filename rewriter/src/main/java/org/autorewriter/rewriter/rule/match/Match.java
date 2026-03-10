@@ -174,6 +174,65 @@ public class Match {
         return model.checkConstraints();
     }
 
+    // ── Transparent Project matching ─────────────────────────────────────
+
+    /**
+     * Match a template LogicalProject "transparently" against a non-Project query node.
+     *
+     * <p>WeTune rule templates use {@code Proj<a s>} as boundary markers between Join
+     * and Filter/Input. In RBO (HepPlanner), {@code wrapWithIdentityProjectIfNeeded}
+     * creates matching Project nodes. In CBO (VolcanoPlanner), identity projections
+     * are eliminated by the MEMO, so the template Proj has no corresponding query node.
+     *
+     * <p>This method "skips" the Proj layer: it binds attrs/schema from the query's
+     * output columns (as if an identity projection existed) and recurses into the
+     * Proj's child template against the query directly.
+     *
+     * <p>Only activates for WeTune template Projects (field names are symbol placeholders).
+     * Non-template Projects (real query projections) still require strict type matching.
+     */
+    private static boolean matchTransparentProject(LogicalProject template, RelNode query, Model model) {
+        // Extract placeholder names from template field names
+        List<String> templateFields = template.getRowType().getFieldNames();
+        String attrsPlaceholder = null;
+        String schemaPlaceholder = null;
+        for (String field : templateFields) {
+            if (SymbolKind.isSymbolName(field)) {
+                if (field.charAt(0) == 'a') attrsPlaceholder = field;
+                else if (field.charAt(0) == 's') schemaPlaceholder = field;
+            }
+        }
+
+        // Only activate for WeTune template Projects (must have at least one symbol placeholder)
+        if (attrsPlaceholder == null && schemaPlaceholder == null) {
+            return false;
+        }
+
+        // Recurse: match the Proj's child template against the query directly
+        if (!match(template.getInput(), query, model)) return false;
+
+        // Bind attrs: resolve all output columns of the query as ColumnRefs
+        // (equivalent to what an identity projection would produce)
+        if (attrsPlaceholder != null) {
+            Symbol attrsSym = Symbol.of(attrsPlaceholder);
+            List<ColumnRef> columnRefs = new ArrayList<>();
+            RelNode resolveTarget = unwrapHepVertex(query);
+            for (int i = 0; i < query.getRowType().getFieldCount(); i++) {
+                ColumnRef ref = ColumnRefResolver.resolve(i, resolveTarget);
+                columnRefs.add(ref);
+            }
+            if (!model.assign(attrsSym, columnRefs)) return false;
+        }
+
+        // Bind schema
+        if (schemaPlaceholder != null) {
+            Symbol schemaSym = Symbol.of(schemaPlaceholder);
+            if (!model.assign(schemaSym, query.getRowType())) return false;
+        }
+
+        return model.checkConstraints();
+    }
+
     // ── Aggregate matching (DISTINCT / Proj*) ─────────────────────────────
 
     private static boolean matchAggregate(LogicalAggregate template, LogicalAggregate query, Model model) {
@@ -358,13 +417,36 @@ public class Match {
         RelNode qLeft = flipped ? query.getRight() : query.getLeft();
         RelNode qRight = flipped ? query.getLeft() : query.getRight();
 
-        if (!match(tLeft, qLeft, model)) return false;
-        if (!match(tRight, qRight, model)) return false;
+        if (!matchJoinChild(tLeft, qLeft, model)) return false;
+        if (!matchJoinChild(tRight, qRight, model)) return false;
 
         // Match join condition
         if (!matchJoinCondition(template, query, model, flipped)) return false;
 
         return model.checkConstraints();
+    }
+
+    /**
+     * Match a Join child: try standard matching first, then transparent Proj matching.
+     *
+     * <p>WeTune rule templates have {@code Proj<a s>(Filter<p a>(Input<t>))} as Join children,
+     * but in CBO the identity Proj is eliminated by the MEMO. This method falls back to
+     * {@link #matchTransparentProject} when the template child is a LogicalProject but the
+     * query child is not. This is the ONLY context where transparent Proj matching is allowed
+     * — it does not apply at the top level or in non-Join contexts.
+     */
+    private static boolean matchJoinChild(RelNode template, RelNode query, Model model) {
+        // Standard matching first
+        if (match(template, query, model)) return true;
+
+        // Transparent Proj fallback: only when template is Proj and standard match failed
+        if (template instanceof LogicalProject) {
+            RelNode unwrapped = unwrapHepVertex(template);
+            if (unwrapped instanceof LogicalProject) {
+                return matchTransparentProject((LogicalProject) unwrapped, query, model);
+            }
+        }
+        return false;
     }
 
     /**

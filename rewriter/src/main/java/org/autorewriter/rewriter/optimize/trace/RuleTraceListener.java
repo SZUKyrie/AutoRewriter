@@ -20,7 +20,6 @@ public class RuleTraceListener implements RelOptListener {
 
     @Override
     public void ruleAttempted(RuleAttemptedEvent event) {
-        // Only log the attempt at DEBUG level, to avoid overwhelming the logs with every attempted match.
         if (event.isBefore()) {
             RelOptRuleCall call = event.getRuleCall();
             log.debug("[ATTEMPT] Rule: {}  on: {}",
@@ -30,7 +29,6 @@ public class RuleTraceListener implements RelOptListener {
 
     @Override
     public void ruleProductionSucceeded(RuleProductionEvent event) {
-        // isBefore=false means the rule has already produced the new RelNode
         if (!event.isBefore()) {
             RelOptRuleCall call = event.getRuleCall();
             stepCounter++;

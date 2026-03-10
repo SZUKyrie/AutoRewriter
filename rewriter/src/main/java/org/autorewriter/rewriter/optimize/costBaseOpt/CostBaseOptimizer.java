@@ -97,11 +97,10 @@ public class CostBaseOptimizer implements BaseOptimizer {
         planner.addRelTraitDef(RelCollationTraitDef.INSTANCE);
 
         // Register JDBC conversion rules (exclude JdbcToEnumerableConverterRule
-        // since we target JdbcConvention, not EnumerableConvention)
+        // since we target JdbcConvention, not EnumerableConvention).
         for (RelOptRule rule : JdbcRules.rules(convention)) {
-            if (!(rule instanceof JdbcToEnumerableConverterRule)) {
-                planner.addRule(rule);
-            }
+            if (rule instanceof JdbcToEnumerableConverterRule) continue;
+            planner.addRule(rule);
         }
 
         // Register table scan conversion rule (bridges AbstractTable to JdbcConvention)

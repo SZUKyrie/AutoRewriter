@@ -4,14 +4,18 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rex.RexCall;
+import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexSubQuery;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.LogicalInSubFilter;
+import org.autorewriter.rewriter.rule.constraint.Constraints;
 import org.autorewriter.rewriter.rule.model.Model;
+import org.autorewriter.rewriter.rule.symbol.Symbol;
 import org.autorewriter.rewriter.rule.symbol.SymbolKind;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Handles filter chain combinatorial matching.
@@ -37,7 +41,7 @@ public class FilterMatcher {
         RelNode templateBottom = getGeneralizedChainInput(templateHead);
         RelNode queryBottom = getGeneralizedChainInput(queryHead);
 
-        return doMatchFilterChain(templateChain, queryChain, templateBottom, queryBottom, queryHead, model);
+        return doMatchFilterChain(templateChain, queryChain, templateBottom, queryBottom, model);
     }
 
     /**
@@ -50,12 +54,12 @@ public class FilterMatcher {
         RelNode templateBottom = getGeneralizedChainInput(templateHead);
         RelNode queryBottom = getGeneralizedChainInput(queryHead);
 
-        return doMatchFilterChain(templateChain, queryChain, templateBottom, queryBottom, queryHead, model);
+        return doMatchFilterChain(templateChain, queryChain, templateBottom, queryBottom, model);
     }
 
     private static boolean doMatchFilterChain(List<RelNode> templateChain, List<RelNode> queryChain,
                                                RelNode templateBottom, RelNode queryBottom,
-                                               RelNode queryOperator, Model model) {
+                                               Model model) {
         // Count template simple filters (non-InSub) and InSub filters separately
         long templateSimpleCount = templateChain.stream().filter(n -> n instanceof LogicalFilter).count();
         long querySimpleCount = queryChain.stream().filter(n -> n instanceof LogicalFilter).count();
@@ -68,52 +72,142 @@ public class FilterMatcher {
         // Match the bottom input first
         if (!Match.match(templateBottom, queryBottom, model)) return false;
 
-        // Try to find an assignment of template filters to query filters
+        // Classify template filters into grouped (1:1) and free (N:1 absorbing)
+        List<Integer> groupedIndices = new ArrayList<>();
+        List<Integer> freeIndices = new ArrayList<>();
+        classifyFilters(templateChain, model.constraints(), groupedIndices, freeIndices);
+
         boolean[] used = new boolean[queryChain.size()];
-        if (!assignFilters(templateChain, queryChain, 0, used, queryOperator, model)) {
+
+        // Phase 1: Match grouped + InSub filters with 1:1 backtracking
+        if (!assignFiltersByIndices(templateChain, queryChain, groupedIndices, 0, used, model)) {
             return false;
         }
 
-        // Collect unmatched query simple filters (WeTune virtualExpr equivalent).
-        // Store per-predicate-symbol so multiple filter chains in the same rule
-        // don't interfere. Key: "virtualExpr_<predSymbol>" parallels "p0_context".
-        List<RexNode> unmatchedConditions = new ArrayList<>();
-        for (int i = 0; i < queryChain.size(); i++) {
-            if (!used[i] && queryChain.get(i) instanceof LogicalFilter) {
-                unmatchedConditions.add(((LogicalFilter) queryChain.get(i)).getCondition());
-            }
+        // Phase 2: Match free filters — each gets one anchor match from remaining
+        if (!assignFreeFilters(templateChain, queryChain, freeIndices, used, model)) {
+            return false;
         }
-        if (!unmatchedConditions.isEmpty()) {
-            // Find the predicate symbol from the first matched simple template filter
-            String predSymbol = null;
-            for (RelNode tmpl : templateChain) {
-                if (tmpl instanceof LogicalFilter && !isInSubFilter(tmpl)) {
-                    predSymbol = extractPredSymbol((LogicalFilter) tmpl);
-                    if (predSymbol != null) break;
-                }
-            }
-            if (predSymbol != null) {
-                model.putExtra("virtualExpr_" + predSymbol,
-                        new Object[]{unmatchedConditions, queryBottom});
-            }
-        }
+
+        // Phase 3: Collect remaining unmatched query filters as virtualExpr
+        collectUnmatchedAsVirtualExpr(templateChain, queryChain, used, queryBottom, model);
 
         return true;
     }
 
-    /**
-     * Backtracking assignment: for each template filter, try each unmatched query filter.
-     * Simple template filters only match LogicalFilter query nodes.
-     * InSub template filters only match LogicalInSubFilter query nodes.
-     */
-    private static boolean assignFilters(List<RelNode> templateChain,
-                                          List<RelNode> queryChain,
-                                          int templateIdx,
-                                          boolean[] used,
-                                          RelNode queryOperator,
-                                          Model model) {
-        if (templateIdx >= templateChain.size()) return true;
+    // ── Filter classification (WeTune grouped vs free) ───────────────────
 
+    /**
+     * Classify template filters into "grouped" (need 1:1 matching) and "free" (N:1 absorbing).
+     *
+     * <p>A filter is <b>grouped</b> if:
+     * <ul>
+     *   <li>It is an InSub filter (always requires exact 1:1 match), OR</li>
+     *   <li>Its attrs symbol shares an equivalence class with another template filter's
+     *       attrs symbol (e.g., AttrsEq(a0, a1) where both a0 and a1 belong to chain filters), OR</li>
+     *   <li>No attrs symbol could be extracted (conservative fallback)</li>
+     * </ul>
+     *
+     * <p>A filter is <b>free</b> if its attrs symbol has no buddies among the chain's
+     * template filters. Free filters can absorb extra query filters as virtualExprs.
+     */
+    private static void classifyFilters(List<RelNode> templateChain, Constraints constraints,
+                                         List<Integer> groupedIndices, List<Integer> freeIndices) {
+        // Extract attrs symbols for all simple template filters
+        Symbol[] attrsSymbols = new Symbol[templateChain.size()];
+        for (int i = 0; i < templateChain.size(); i++) {
+            RelNode node = templateChain.get(i);
+            if (isInSubFilter(node)) {
+                groupedIndices.add(i);
+            } else if (node instanceof LogicalFilter) {
+                attrsSymbols[i] = extractAttrsSymbol((LogicalFilter) node);
+            }
+        }
+
+        // For each non-InSub filter, check for buddies in the eq class
+        for (int i = 0; i < templateChain.size(); i++) {
+            if (!(templateChain.get(i) instanceof LogicalFilter) || isInSubFilter(templateChain.get(i))) {
+                continue; // already handled
+            }
+
+            Symbol attrsSym = attrsSymbols[i];
+            if (attrsSym == null) {
+                groupedIndices.add(i); // conservative: no attrs → grouped
+                continue;
+            }
+
+            boolean hasBuddy = false;
+            if (constraints != null) {
+                Set<Symbol> eqClass = constraints.eqClassOf(attrsSym);
+                for (int j = 0; j < templateChain.size(); j++) {
+                    if (i == j) continue;
+                    if (attrsSymbols[j] != null && eqClass.contains(attrsSymbols[j])) {
+                        hasBuddy = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasBuddy) {
+                groupedIndices.add(i);
+            } else {
+                freeIndices.add(i);
+            }
+        }
+    }
+
+    /**
+     * Extract the attrs symbol (e.g., Symbol("a0")) from a template filter's predicate.
+     *
+     * <p>Template filter conditions are {@link RexCall} nodes with predicate placeholder
+     * operators ({@code p\d+}). The operands are {@link RexInputRef} pointing to field
+     * names in the filter's input row type. If a field name is an attrs symbol ({@code a\d+}),
+     * it is returned.
+     *
+     * @return the attrs Symbol, or {@code null} if not found
+     */
+    private static Symbol extractAttrsSymbol(LogicalFilter filter) {
+        RexNode cond = filter.getCondition();
+        if (!(cond instanceof RexCall)) return null;
+        RexCall call = (RexCall) cond;
+        String opName = call.getOperator().getName();
+        if (!SymbolKind.isSymbolName(opName) || opName.charAt(0) != 'p') return null;
+
+        RelNode input = Match.unwrapHepVertex(filter.getInput());
+        List<String> fieldNames = input.getRowType().getFieldNames();
+        for (RexNode operand : call.getOperands()) {
+            if (operand instanceof RexInputRef) {
+                int idx = ((RexInputRef) operand).getIndex();
+                if (idx < fieldNames.size()) {
+                    String fieldName = fieldNames.get(idx);
+                    if (SymbolKind.isSymbolName(fieldName) && fieldName.charAt(0) == 'a') {
+                        return Symbol.of(fieldName);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    // ── Phase 1: Grouped 1:1 backtracking ────────────────────────────────
+
+    /**
+     * Backtracking 1:1 assignment for grouped + InSub template filters.
+     *
+     * <p>Only operates on the specified template indices. Uses model.derive()
+     * for backtracking. Passes individual {@code queryFilter} as context to
+     * {@link Match#matchRexNode} for correct predicate context storage
+     * (Step 1 fix: not the chain head).
+     */
+    private static boolean assignFiltersByIndices(List<RelNode> templateChain,
+                                                   List<RelNode> queryChain,
+                                                   List<Integer> templateIndices,
+                                                   int pos,
+                                                   boolean[] used,
+                                                   Model model) {
+        if (pos >= templateIndices.size()) return true;
+
+        int templateIdx = templateIndices.get(pos);
         RelNode templateFilter = templateChain.get(templateIdx);
         boolean templateIsInSub = isInSubFilter(templateFilter);
 
@@ -129,15 +223,14 @@ public class FilterMatcher {
             Model derived = model.derive();
             boolean matched;
             if (templateIsInSub) {
-                // Match InSub template against InSub query
                 matched = matchInSubPair(
                         (LogicalFilter) templateFilter, (LogicalInSubFilter) queryFilter, derived);
             } else {
-                // Match simple filter conditions
+                // Pass queryFilter (not chain head) as context for correct _context storage
                 matched = Match.matchRexNode(
                         ((LogicalFilter) templateFilter).getCondition(),
                         ((LogicalFilter) queryFilter).getCondition(),
-                        queryOperator, derived);
+                        queryFilter, derived);
             }
 
             if (matched && derived.checkConstraints()) {
@@ -148,10 +241,10 @@ public class FilterMatcher {
                     Match.matchRexNode(
                             ((LogicalFilter) templateFilter).getCondition(),
                             ((LogicalFilter) queryFilter).getCondition(),
-                            queryOperator, model);
+                            queryFilter, model);
                 }
                 used[qi] = true;
-                if (assignFilters(templateChain, queryChain, templateIdx + 1, used, queryOperator, model)) {
+                if (assignFiltersByIndices(templateChain, queryChain, templateIndices, pos + 1, used, model)) {
                     return true;
                 }
                 used[qi] = false;
@@ -159,6 +252,93 @@ public class FilterMatcher {
         }
 
         return false;
+    }
+
+    // ── Phase 2: Free filter anchor matching ─────────────────────────────
+
+    /**
+     * Anchor matching for free template filters.
+     *
+     * <p>Each free template filter gets one anchor match from the remaining unused
+     * query filters. No backtracking between free filters — each independently
+     * takes the first compatible match. Remaining unmatched query filters will
+     * be collected as virtualExprs in Phase 3.
+     */
+    private static boolean assignFreeFilters(List<RelNode> templateChain,
+                                              List<RelNode> queryChain,
+                                              List<Integer> freeIndices,
+                                              boolean[] used,
+                                              Model model) {
+        for (int templateIdx : freeIndices) {
+            RelNode templateFilter = templateChain.get(templateIdx);
+            if (!(templateFilter instanceof LogicalFilter)) continue;
+
+            boolean foundMatch = false;
+            for (int qi = 0; qi < queryChain.size(); qi++) {
+                if (used[qi]) continue;
+
+                RelNode queryFilter = queryChain.get(qi);
+                if (!(queryFilter instanceof LogicalFilter)) continue;
+                if (queryFilter instanceof LogicalInSubFilter) continue;
+
+                Model derived = model.derive();
+                boolean matched = Match.matchRexNode(
+                        ((LogicalFilter) templateFilter).getCondition(),
+                        ((LogicalFilter) queryFilter).getCondition(),
+                        queryFilter, derived);
+
+                if (matched && derived.checkConstraints()) {
+                    // Replay into real model
+                    Match.matchRexNode(
+                            ((LogicalFilter) templateFilter).getCondition(),
+                            ((LogicalFilter) queryFilter).getCondition(),
+                            queryFilter, model);
+                    used[qi] = true;
+                    foundMatch = true;
+                    break;
+                }
+            }
+
+            if (!foundMatch) return false;
+        }
+        return true;
+    }
+
+    // ── Phase 3: Collect unmatched as virtualExpr ────────────────────────
+
+    /**
+     * Collect remaining unmatched query filter conditions as virtualExpr.
+     *
+     * <p>Unmatched query simple filters (LogicalFilter, not InSub) are stored under
+     * {@code "virtualExpr_<predSymbol>"} in the Model, keyed by the first matched
+     * template filter's predicate symbol. This parallels WeTune's virtualExpr mechanism
+     * and allows {@link org.autorewriter.rewriter.rule.instantiation.Instantiation#applyVirtualExprs}
+     * to re-apply them during target construction.
+     */
+    private static void collectUnmatchedAsVirtualExpr(List<RelNode> templateChain,
+                                                       List<RelNode> queryChain,
+                                                       boolean[] used,
+                                                       RelNode queryBottom,
+                                                       Model model) {
+        List<RexNode> unmatchedConditions = new ArrayList<>();
+        for (int i = 0; i < queryChain.size(); i++) {
+            if (!used[i] && queryChain.get(i) instanceof LogicalFilter) {
+                unmatchedConditions.add(((LogicalFilter) queryChain.get(i)).getCondition());
+            }
+        }
+        if (!unmatchedConditions.isEmpty()) {
+            String predSymbol = null;
+            for (RelNode tmpl : templateChain) {
+                if (tmpl instanceof LogicalFilter && !isInSubFilter(tmpl)) {
+                    predSymbol = extractPredSymbol((LogicalFilter) tmpl);
+                    if (predSymbol != null) break;
+                }
+            }
+            if (predSymbol != null) {
+                model.putExtra("virtualExpr_" + predSymbol,
+                        new Object[]{unmatchedConditions, queryBottom});
+            }
+        }
     }
 
     /**

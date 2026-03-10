@@ -441,6 +441,7 @@ class MatchTest {
 
     // ══════════════════════════════════════════════════════════════════════
     // 9. testMatchFailsOnTypeMismatch — template Proj doesn't match query Filter
+    //    (transparent Proj matching only activates inside Join child context)
     // ══════════════════════════════════════════════════════════════════════
 
     @Test
@@ -469,7 +470,7 @@ class MatchTest {
 
         boolean result = Match.match(template, query, model);
 
-        assertFalse(result, "Project template should not match a Filter query");
+        assertFalse(result, "Project template should not match a Filter query outside Join context");
     }
 
     // ══════════════════════════════════════════════════════════════════════

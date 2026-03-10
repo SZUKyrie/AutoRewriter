@@ -78,10 +78,14 @@ public class Instantiation {
             Symbol sourceSym = constraints.instantiationOf(targetSym);
             if (sourceSym != null) {
                 RelNode bound = model.ofTable(sourceSym);
-                if (bound != null) return bound;
+                if (bound != null) {
+                    return bound;
+                }
             }
             RelNode direct = model.ofTable(targetSym);
-            if (direct != null) return direct;
+            if (direct != null) {
+                return direct;
+            }
         }
         return template;
     }
@@ -297,10 +301,12 @@ public class Instantiation {
         RelNode right = instantiateNode(template.getRight());
 
         // Wrap non-trivial join inputs with identity projections (WeTune NormalizeProj).
-        // This establishes clean column namespaces for each join side, which:
-        // 1. Enables correct column disambiguation in self-joins (same-name columns)
-        // 2. Allows RelToSqlConverter to generate proper derived table aliases
-        // 3. Creates a stable column identity layer for ColumnRefRegistry resolution
+        // This establishes clean column namespaces for each join side AND prevents
+        // infinite rule re-matching in RBO (HepPlanner) by ensuring the output has
+        // Proj layers that differ structurally from the input.
+        // In CBO (VolcanoPlanner), the MEMO may eliminate these identity projections.
+        // Match.matchJoinChild uses transparent Proj matching as fallback to handle
+        // this case, allowing rule chaining to work across MEMO-stripped Proj layers.
         left = wrapWithIdentityProjectIfNeeded(left);
         right = wrapWithIdentityProjectIfNeeded(right);
 

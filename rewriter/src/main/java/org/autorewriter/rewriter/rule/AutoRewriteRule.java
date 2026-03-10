@@ -226,4 +226,5 @@ public class AutoRewriteRule extends RelOptRule {
 
         return LogicalProject.create(node, Collections.emptyList(), castExprs, fieldNames);
     }
+
 }
