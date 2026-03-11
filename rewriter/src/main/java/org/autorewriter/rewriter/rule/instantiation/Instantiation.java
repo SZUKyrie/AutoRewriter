@@ -168,15 +168,58 @@ public class Instantiation {
         }
 
         RelNode child = instantiateNode(template.getInput());
-        RexNode condition = instantiateRexNode(template.getCondition(), child);
-        if (condition == null) condition = template.getCondition();
+        RexNode templateCond = template.getCondition();
+
+        // ShardingSphere parser may merge nested Filter<p3>(Filter<p2>(...)) into a single
+        // Filter with AND(p3, p2) compound condition. Detect this case and split into
+        // separate LogicalFilter nodes so downstream rules (like 233) can match
+        // Filter(Filter(Input)) patterns for filter merging/elimination.
+        List<RexNode> predParts = splitAndPredicatePlaceholders(templateCond);
+        if (predParts != null) {
+            // Build filters bottom-up: last predicate first (innermost)
+            RelNode result = child;
+            for (int i = predParts.size() - 1; i >= 0; i--) {
+                RexNode partCondition = instantiateRexNode(predParts.get(i), result);
+                if (partCondition == null) partCondition = predParts.get(i);
+                result = LogicalFilter.create(result, partCondition);
+                result = applyVirtualExprs(predParts.get(i), result);
+            }
+            return result;
+        }
+
+        // Standard single-predicate filter instantiation
+        RexNode condition = instantiateRexNode(templateCond, child);
+        if (condition == null) condition = templateCond;
 
         RelNode result = LogicalFilter.create(child, condition);
 
         // Re-apply unmatched filters scoped to this filter's predicate symbol (virtualExpr).
-        result = applyVirtualExprs(template.getCondition(), result);
+        result = applyVirtualExprs(templateCond, result);
 
         return result;
+    }
+
+    /**
+     * If a template filter condition is {@code AND(p1(...), p2(...), ...)} where each
+     * operand is a predicate placeholder, return the individual placeholder RexNodes.
+     * This handles ShardingSphere parser merging nested {@code Filter<p3>(Filter<p2>(...))}
+     * into a single {@code Filter(AND(p3, p2))}.
+     *
+     * @return list of individual predicate placeholder RexNodes, or null if not applicable
+     */
+    private static List<RexNode> splitAndPredicatePlaceholders(RexNode condition) {
+        if (!(condition instanceof RexCall)) return null;
+        RexCall call = (RexCall) condition;
+        if (!"AND".equals(call.getOperator().getName())) return null;
+
+        List<RexNode> parts = new ArrayList<>();
+        for (RexNode operand : call.getOperands()) {
+            if (!(operand instanceof RexCall)) return null;
+            String opName = ((RexCall) operand).getOperator().getName();
+            if (!SymbolKind.isSymbolName(opName) || opName.charAt(0) != 'p') return null;
+            parts.add(operand);
+        }
+        return parts.isEmpty() ? null : parts;
     }
 
     private RelNode instantiateInSubFilter(LogicalFilter template) {

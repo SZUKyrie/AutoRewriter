@@ -233,7 +233,9 @@ public class FilterMatcher {
                         queryFilter, derived);
             }
 
-            if (matched && derived.checkConstraints()) {
+            boolean constraintOk = matched && derived.checkConstraints();
+
+            if (constraintOk) {
                 // Replay into real model
                 if (templateIsInSub) {
                     matchInSubPair((LogicalFilter) templateFilter, (LogicalInSubFilter) queryFilter, model);
@@ -424,6 +426,11 @@ public class FilterMatcher {
      * Collect all filter-like nodes (LogicalFilter and LogicalInSubFilter)
      * in a chain from head to bottom. For LogicalInSubFilter, follows the
      * left child (main input) as the chain continuation.
+     *
+     * <p>Handles ShardingSphere parser merging nested {@code Filter<p1>(Filter<p0>(...))}
+     * into a single {@code Filter(AND(p1, p0))}. When a LogicalFilter has a compound
+     * AND condition where each operand is a predicate placeholder ({@code p\d+}), the
+     * filter is split into multiple virtual LogicalFilter nodes in the chain.
      */
     static List<RelNode> collectGeneralizedFilterChain(RelNode head) {
         List<RelNode> chain = new ArrayList<>();
@@ -431,8 +438,18 @@ public class FilterMatcher {
         while (true) {
             current = Match.unwrapHepVertex(current);
             if (current instanceof LogicalFilter) {
-                chain.add(current);
-                current = ((LogicalFilter) current).getInput();
+                LogicalFilter filter = (LogicalFilter) current;
+                // Check for parser-merged AND(p1, p0) compound predicate placeholders
+                List<RexNode> predParts = splitAndPredicatePlaceholders(filter.getCondition());
+                if (predParts != null && predParts.size() > 1) {
+                    // Split into virtual filters, each with a single predicate placeholder
+                    for (RexNode part : predParts) {
+                        chain.add(LogicalFilter.create(filter.getInput(), part));
+                    }
+                } else {
+                    chain.add(current);
+                }
+                current = filter.getInput();
             } else if (current instanceof LogicalInSubFilter) {
                 chain.add(current);
                 current = ((LogicalInSubFilter) current).getLeft();
@@ -441,6 +458,29 @@ public class FilterMatcher {
             }
         }
         return chain;
+    }
+
+    /**
+     * If a filter condition is {@code AND(p1(...), p2(...), ...)} where each
+     * operand is a predicate placeholder, return the individual placeholder RexNodes.
+     * This handles ShardingSphere parser merging nested {@code Filter<p3>(Filter<p2>(...))}
+     * into a single {@code Filter(AND(p3, p2))}.
+     *
+     * @return list of individual predicate placeholder RexNodes, or null if not applicable
+     */
+    private static List<RexNode> splitAndPredicatePlaceholders(RexNode condition) {
+        if (!(condition instanceof RexCall)) return null;
+        RexCall call = (RexCall) condition;
+        if (!"AND".equals(call.getOperator().getName())) return null;
+
+        List<RexNode> parts = new ArrayList<>();
+        for (RexNode operand : call.getOperands()) {
+            if (!(operand instanceof RexCall)) return null;
+            String opName = ((RexCall) operand).getOperator().getName();
+            if (!SymbolKind.isSymbolName(opName) || opName.charAt(0) != 'p') return null;
+            parts.add(operand);
+        }
+        return parts.isEmpty() ? null : parts;
     }
 
     /**

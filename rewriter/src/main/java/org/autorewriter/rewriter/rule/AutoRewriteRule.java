@@ -35,11 +35,11 @@ public class AutoRewriteRule extends RelOptRule {
     private final RelNode targetTemplate;
     private final Constraints constraints;
 
-    // Cache the Model from the last successful matches() call.
-    // In VolcanoPlanner, RelSubset contents may change between matches() and onMatch(),
-    // causing re-matching in onMatch() to fail. Caching avoids this race condition.
-    private volatile Model lastMatchedModel;
-    private volatile RelNode lastMatchedNode;
+    // Cache the Model from successful matches() calls.
+    // In VolcanoPlanner, multiple matches can succeed before any onMatch() is called.
+    // The IterativeRuleDriver's assertion re-checks matches() before onMatch(), so we
+    // need per-node caching (not just single-entry) to handle concurrent matches.
+    private final Map<RelNode, Model> matchCache = new IdentityHashMap<>();
 
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext) {
         this(operand, ruleContext, -1);
@@ -71,10 +71,8 @@ public class AutoRewriteRule extends RelOptRule {
         RelNode queryNode = call.rel(0);
 
         // VolcanoPlanner's IterativeRuleDriver re-checks matches() via assert
-        // before calling onMatch(). Since our deep structural matching traverses
-        // RelSubsets whose contents may change between calls, the re-check could
-        // fail. Return cached result for the same node to satisfy the assertion.
-        if (queryNode == lastMatchedNode && lastMatchedModel != null) {
+        // before calling onMatch(). Return cached result to satisfy the assertion.
+        if (matchCache.containsKey(queryNode)) {
             return true;
         }
 
@@ -95,8 +93,7 @@ public class AutoRewriteRule extends RelOptRule {
         log.info("Rule[{}] match succeeded", ruleId);
 
         // Cache for onMatch() and assertion re-check
-        this.lastMatchedModel = model;
-        this.lastMatchedNode = queryNode;
+        matchCache.put(queryNode, model);
 
         return true;
     }
@@ -108,12 +105,9 @@ public class AutoRewriteRule extends RelOptRule {
         try {
             RelNode queryNode = call.rel(0);
 
-            // Reuse cached Model if available (same node identity),
-            // otherwise fall back to re-matching
-            Model model;
-            if (queryNode == lastMatchedNode && lastMatchedModel != null) {
-                model = lastMatchedModel;
-            } else {
+            // Reuse cached Model if available, otherwise fall back to re-matching
+            Model model = matchCache.remove(queryNode);
+            if (model == null) {
                 model = new Model(constraints);
                 if (!Match.match(sourceTemplate, queryNode, model)) {
                     log.warn("Rule[{}] onMatch re-match failed unexpectedly", ruleId);
@@ -124,9 +118,6 @@ public class AutoRewriteRule extends RelOptRule {
                     return;
                 }
             }
-            // Clear cache
-            lastMatchedModel = null;
-            lastMatchedNode = null;
 
             RelNode rewrittenNode = Instantiation.instantiate(targetTemplate, model, constraints);
 
