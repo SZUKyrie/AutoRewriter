@@ -49,7 +49,7 @@ public class PostgresIntegrationExample {
         // Step 1: 创建连接配置
         PostgresConnectionConfig config = PostgresConnectionConfig.builder()
             .host("localhost")
-            .port(5432)
+            .port(55555)
             .database("testdb")
             .schema("public")
             .username("postgres")
@@ -93,7 +93,7 @@ public class PostgresIntegrationExample {
         // 你可以注册多个 PostgreSQL 配置
         PostgresConnectionConfig devConfig = PostgresConnectionConfig.builder()
             .host("localhost")
-            .port(5432)
+            .port(55555)
             .database("dev_db")
             .username("dev_user")
             .password("dev_pass")
@@ -101,7 +101,7 @@ public class PostgresIntegrationExample {
 
         PostgresConnectionConfig prodConfig = PostgresConnectionConfig.builder()
             .host("prod-server")
-            .port(5432)
+            .port(55555)
             .database("prod_db")
             .username("prod_user")
             .password("prod_pass")

@@ -55,7 +55,7 @@ public class CalciteSchemaRegistry {
     /**
      * Initialize PostgreSQL schema with JDBC URL (convenience method)
      *
-     * @param url JDBC URL (e.g., "jdbc:postgresql://localhost:5432/mydb")
+     * @param url JDBC URL (e.g., "jdbc:postgresql://localhost:55555/mydb")
      * @param username database username
      * @param password database password
      */

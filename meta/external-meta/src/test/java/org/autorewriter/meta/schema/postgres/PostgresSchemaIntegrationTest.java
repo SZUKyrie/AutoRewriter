@@ -26,7 +26,7 @@ public class PostgresSchemaIntegrationTest {
         // Update these values to match your PostgreSQL setup
         PostgresConnectionConfig config = PostgresConnectionConfig.builder()
             .host("localhost")
-            .port(5432)
+            .port(55555)
             .database("testdb")
             .schema("public")
             .username("postgres")

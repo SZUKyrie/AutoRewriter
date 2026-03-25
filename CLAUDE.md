@@ -23,7 +23,7 @@ mvn test -pl rewriter -Dtest=RuleBaseOptimizerTest                              
 mvn test -pl rewriter -Dtest=RuleBaseOptimizerTest#testRemoveDistinctWithUniqueConstraint  # Single test method
 ```
 
-The `test` module contains E2E tests that require a local PostgreSQL instance (`localhost:5432`, user `postgres`/`postgres`). Unit tests in `rewriter` and other modules do not require external databases.
+The `test` module contains E2E tests that require a local PostgreSQL instance (`localhost:55555`, user `postgres`/`postgres`). Unit tests in `rewriter` and other modules do not require external databases.
 
 No linter is configured.
 

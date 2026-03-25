@@ -173,7 +173,7 @@ public class SqlPlanFixture {
     }
 
     private String getUrl() {
-        return "jdbc:postgresql://localhost:5432/" + this.db;
+        return "jdbc:postgresql://localhost:55555/" + this.db;
     }
 
     private TableEngine mapComputeEngineToTableEngine(ComputeEngine computeEngine) {
@@ -224,6 +224,7 @@ public class SqlPlanFixture {
     }
 
     protected void createNewPostgresTables() throws SQLException {
+        ensureDatabaseExists(this.db);
         String url = getUrl();
         int successCount = 0;
         try (Connection conn = DriverManager.getConnection(url, "postgres", "postgres")) {
@@ -237,6 +238,19 @@ public class SqlPlanFixture {
             log.info("Successfully created {} tables in PostgreSQL database", successCount);
         } catch (SQLException e) {
             throw new SQLException("Failed to connect to PostgreSQL instance", e);
+        }
+    }
+
+    private void ensureDatabaseExists(String dbName) throws SQLException {
+        String maintenanceUrl = "jdbc:postgresql://localhost:55555/postgres";
+        try (Connection conn = DriverManager.getConnection(maintenanceUrl, "postgres", "postgres");
+             Statement stmt = conn.createStatement()) {
+            java.sql.ResultSet rs = stmt.executeQuery(
+                    "SELECT 1 FROM pg_database WHERE datname = '" + dbName + "'");
+            if (!rs.next()) {
+                stmt.execute("CREATE DATABASE \"" + dbName + "\"");
+                log.info("Created PostgreSQL database: {}", dbName);
+            }
         }
     }
 }
