@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class RuleParserSuccessRateTest {
 
-    private static final String RULE_FILES_DIR = "/Users/yuekunyu/PersonalProject/AutoRewriter/test/src/main/resources/example";
+    private static final String RULE_FILES_DIR = "/SSD/01/yyk/AutoRewriter/test/src/main/resources/example";
     private static final String SEPARATOR = "─".repeat(80);
     private static final String DOUBLE_SEPARATOR = "═".repeat(80);
 

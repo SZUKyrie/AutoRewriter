@@ -5,10 +5,13 @@ import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.plan.volcano.RelSubset;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.metadata.ChainedRelMetadataProvider;
 import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
 import org.apache.calcite.rel.metadata.JaninoRelMetadataProvider;
 import org.apache.calcite.rel.metadata.RelColumnOrigin;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsInSubFilter;
+import com.google.common.collect.ImmutableList;
 import org.apache.calcite.rel.type.RelDataTypeField;
 
 import java.util.List;
@@ -21,7 +24,11 @@ import java.util.Set;
 public final class ColumnRefResolver {
 
     private static final JaninoRelMetadataProvider METADATA_PROVIDER =
-            JaninoRelMetadataProvider.of(DefaultRelMetadataProvider.INSTANCE);
+            JaninoRelMetadataProvider.of(
+                    ChainedRelMetadataProvider.of(ImmutableList.of(
+                            RelMdColumnOriginsInSubFilter.SOURCE,
+                            DefaultRelMetadataProvider.INSTANCE
+                    )));
 
     private ColumnRefResolver() {}
 

@@ -84,6 +84,11 @@
         </dependency>
         <dependency>
             <groupId>org.apache.shardingsphere</groupId>
+            <artifactId>shardingsphere-parser-sql-engine-rewiter</artifactId>
+            <version>5.5.3-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.shardingsphere</groupId>
             <artifactId>shardingsphere-parser-sql-statement-core</artifactId>
             <version>5.5.3-SNAPSHOT</version>
         </dependency>

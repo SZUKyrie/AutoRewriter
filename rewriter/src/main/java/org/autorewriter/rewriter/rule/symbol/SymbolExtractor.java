@@ -51,8 +51,6 @@ public final class SymbolExtractor {
         return Collections.unmodifiableMap(symbols);
     }
 
-    // ── RelNode dispatch ────────────────────────────────────────────────
-
     private static void walkRelNode(RelNode node, Map<String, Symbol> symbols) {
         if (node instanceof LogicalTableScan) {
             extractFromTableScan((LogicalTableScan) node, symbols);

@@ -24,11 +24,11 @@ AutoRwFakeE2ETest extends AutoRwFakeE2ETesBase{
 //        executePipeline(PipelineType.CBO, "tpcds", RULE_DIR);
 //    }
 //
-//    @Test
-//    public void testDiasporaCbo() {
-//        executePipeline(PipelineType.CBO, "diaspora", RULE_DIR);
-//    }
-//
+    @Test
+    public void testDiasporaCbo() {
+        executePipeline(PipelineType.CBO, "diaspora", RULE_DIR);
+    }
+
     @Test
     public void testDiaspora2Cbo() {
         executePipeline(PipelineType.CBO, "diaspora", RULE_DIR3);
