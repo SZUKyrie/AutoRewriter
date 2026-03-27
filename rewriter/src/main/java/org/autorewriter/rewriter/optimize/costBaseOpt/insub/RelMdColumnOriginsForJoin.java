@@ -1,8 +1,10 @@
 package org.autorewriter.rewriter.optimize.costBaseOpt.insub;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.plan.volcano.RelSubset;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.metadata.BuiltInMetadata;
 import org.apache.calcite.rel.metadata.MetadataDef;
 import org.apache.calcite.rel.metadata.MetadataHandler;
@@ -15,27 +17,34 @@ import org.apache.calcite.util.BuiltInMethod;
 import java.util.Set;
 
 /**
- * Metadata handler that provides column origin information for {@link LogicalInSubFilter}.
- * <p>
- * Since {@link LogicalInSubFilter#deriveRowType()} returns {@code left.getRowType()},
- * all output columns originate from the left input — so we simply delegate to it.
+ * Metadata handler for Join column origins.
+ * Delegates to left or right input based on field index.
  */
-public class RelMdColumnOriginsInSubFilter
+@Slf4j
+public class RelMdColumnOriginsForJoin
         implements MetadataHandler<BuiltInMetadata.ColumnOrigin> {
 
     public static final RelMetadataProvider SOURCE =
             ReflectiveRelMetadataProvider.reflectiveSource(
                     BuiltInMethod.COLUMN_ORIGIN.method,
-                    new RelMdColumnOriginsInSubFilter());
+                    new RelMdColumnOriginsForJoin());
+
     @Override
     public MetadataDef<BuiltInMetadata.ColumnOrigin> getDef() {
         return BuiltInMetadata.ColumnOrigin.DEF;
     }
 
     public Set<RelColumnOrigin> getColumnOrigins(
-            LogicalInSubFilter rel, RelMetadataQuery mq, int iOutputColumn) {
-        RelNode left = unwrap(rel.getLeft());
-        return mq.getColumnOrigins(left, iOutputColumn);
+            Join rel, RelMetadataQuery mq, int iOutputColumn) {
+        int leftFieldCount = rel.getLeft().getRowType().getFieldCount();
+
+        if (iOutputColumn < leftFieldCount) {
+            RelNode left = unwrap(rel.getLeft());
+            return mq.getColumnOrigins(left, iOutputColumn);
+        } else {
+            RelNode right = unwrap(rel.getRight());
+            return mq.getColumnOrigins(right, iOutputColumn - leftFieldCount);
+        }
     }
 
     private static RelNode unwrap(RelNode node) {

@@ -17,6 +17,13 @@ import org.apache.calcite.plan.volcano.VolcanoPlanner;
 import org.apache.calcite.rel.RelCollationTraitDef;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
+import org.apache.calcite.rel.metadata.ChainedRelMetadataProvider;
+import org.apache.calcite.rel.metadata.JaninoRelMetadataProvider;
+import com.google.common.collect.ImmutableList;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsForProject;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsForFilter;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsForJoin;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsInSubFilter;
 import org.apache.calcite.rel.rules.CoreRules;
 import org.apache.calcite.rel.rules.JoinCommuteRule;
 import org.apache.calcite.sql.dialect.PostgresqlSqlDialect;
@@ -137,7 +144,15 @@ public class CostBaseOptimizer implements BaseOptimizer {
             planner.addListener(new RuleTraceListener(trace));
         }
 
-        root.getCluster().setMetadataProvider(DefaultRelMetadataProvider.INSTANCE);
+        root.getCluster().setMetadataProvider(
+                JaninoRelMetadataProvider.of(
+                        ChainedRelMetadataProvider.of(ImmutableList.of(
+                                RelMdColumnOriginsForProject.SOURCE,
+                                RelMdColumnOriginsForFilter.SOURCE,
+                                RelMdColumnOriginsForJoin.SOURCE,
+                                RelMdColumnOriginsInSubFilter.SOURCE,
+                                DefaultRelMetadataProvider.INSTANCE
+                        ))));
 
         // Replace the planner on the existing cluster.
         // The RelNode was created by SqlAnalyzer with a different planner (from

@@ -11,6 +11,9 @@ import org.apache.calcite.rel.metadata.JaninoRelMetadataProvider;
 import org.apache.calcite.rel.metadata.RelColumnOrigin;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsInSubFilter;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsForFilter;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsForProject;
+import org.autorewriter.rewriter.optimize.costBaseOpt.insub.RelMdColumnOriginsForJoin;
 import com.google.common.collect.ImmutableList;
 import org.apache.calcite.rel.type.RelDataTypeField;
 
@@ -26,6 +29,9 @@ public final class ColumnRefResolver {
     private static final JaninoRelMetadataProvider METADATA_PROVIDER =
             JaninoRelMetadataProvider.of(
                     ChainedRelMetadataProvider.of(ImmutableList.of(
+                            RelMdColumnOriginsForProject.SOURCE,
+                            RelMdColumnOriginsForFilter.SOURCE,
+                            RelMdColumnOriginsForJoin.SOURCE,
                             RelMdColumnOriginsInSubFilter.SOURCE,
                             DefaultRelMetadataProvider.INSTANCE
                     )));
@@ -41,29 +47,35 @@ public final class ColumnRefResolver {
      * using Calcite's RelMetadataQuery.getColumnOrigins().
      */
     public static ColumnRef resolve(int fieldIndex, RelNode operator) {
-        operator = unwrap(operator);
+        RelNode unwrapped = unwrap(operator);
 
-        try {
-            RelMetadataQuery mq = createMetadataQuery();
-            Set<RelColumnOrigin> origins = mq.getColumnOrigins(operator, fieldIndex);
-
-            if (origins != null && !origins.isEmpty()) {
-                RelColumnOrigin origin = origins.iterator().next();
-                if (!origin.isDerived()) {
-                    RelOptTable table = origin.getOriginTable();
-                    String tableName = String.join(".", table.getQualifiedName());
-                    int originCol = origin.getOriginColumnOrdinal();
-                    String columnName = table.getRowType().getFieldNames().get(originCol);
-                    return new ColumnRef(tableName, columnName);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Failed to resolve column origin via metadata for index {} on {}: {}",
-                    fieldIndex, operator.getRelTypeName(), e.getMessage());
+        // Validate field index is within bounds
+        int fieldCount = unwrapped.getRowType().getFieldCount();
+        if (fieldIndex < 0 || fieldIndex >= fieldCount) {
+            throw new IllegalStateException(
+                    String.format("Field index %d out of bounds for %s (has %d fields)",
+                            fieldIndex, unwrapped.getRelTypeName(), fieldCount));
         }
 
-        String columnName = operator.getRowType().getFieldNames().get(fieldIndex);
-        return new ColumnRef("$unknown", columnName);
+        RelMetadataQuery mq = createMetadataQuery();
+        Set<RelColumnOrigin> origins = mq.getColumnOrigins(unwrapped, fieldIndex);
+        if (origins != null && !origins.isEmpty()) {
+            RelColumnOrigin origin = origins.iterator().next();
+            if (!origin.isDerived()) {
+                RelOptTable table = origin.getOriginTable();
+                String tableName = String.join(".", table.getQualifiedName());
+                int originCol = origin.getOriginColumnOrdinal();
+                String columnName = table.getRowType().getFieldNames().get(originCol);
+                return new ColumnRef(tableName, columnName);
+            }
+        }
+
+        log.error("Cannot resolve column origin for field {} on {}: origins={}, rowType fields={}",
+                fieldIndex, unwrapped.getRelTypeName(), origins,
+                unwrapped.getRowType().getFieldCount());
+        throw new IllegalStateException(
+                String.format("Cannot resolve column origin for field index %d on %s",
+                        fieldIndex, unwrapped.getRelTypeName()));
     }
 
     /**

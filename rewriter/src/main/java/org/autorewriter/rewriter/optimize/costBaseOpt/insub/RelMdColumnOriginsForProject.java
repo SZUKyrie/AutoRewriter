@@ -1,8 +1,10 @@
 package org.autorewriter.rewriter.optimize.costBaseOpt.insub;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.plan.volcano.RelSubset;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.metadata.BuiltInMetadata;
 import org.apache.calcite.rel.metadata.MetadataDef;
 import org.apache.calcite.rel.metadata.MetadataHandler;
@@ -10,32 +12,39 @@ import org.apache.calcite.rel.metadata.ReflectiveRelMetadataProvider;
 import org.apache.calcite.rel.metadata.RelColumnOrigin;
 import org.apache.calcite.rel.metadata.RelMetadataProvider;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
+import org.apache.calcite.rex.RexInputRef;
+import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.util.BuiltInMethod;
 
+import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Metadata handler that provides column origin information for {@link LogicalInSubFilter}.
- * <p>
- * Since {@link LogicalInSubFilter#deriveRowType()} returns {@code left.getRowType()},
- * all output columns originate from the left input — so we simply delegate to it.
+ * Metadata handler for Project column origins.
  */
-public class RelMdColumnOriginsInSubFilter
+@Slf4j
+public class RelMdColumnOriginsForProject
         implements MetadataHandler<BuiltInMetadata.ColumnOrigin> {
 
     public static final RelMetadataProvider SOURCE =
             ReflectiveRelMetadataProvider.reflectiveSource(
                     BuiltInMethod.COLUMN_ORIGIN.method,
-                    new RelMdColumnOriginsInSubFilter());
+                    new RelMdColumnOriginsForProject());
+
     @Override
     public MetadataDef<BuiltInMetadata.ColumnOrigin> getDef() {
         return BuiltInMetadata.ColumnOrigin.DEF;
     }
 
     public Set<RelColumnOrigin> getColumnOrigins(
-            LogicalInSubFilter rel, RelMetadataQuery mq, int iOutputColumn) {
-        RelNode left = unwrap(rel.getLeft());
-        return mq.getColumnOrigins(left, iOutputColumn);
+            Project rel, RelMetadataQuery mq, int iOutputColumn) {
+        RexNode expr = rel.getProjects().get(iOutputColumn);
+        if (expr instanceof RexInputRef) {
+            int inputIndex = ((RexInputRef) expr).getIndex();
+            RelNode input = unwrap(rel.getInput());
+            return mq.getColumnOrigins(input, inputIndex);
+        }
+        return new HashSet<>();
     }
 
     private static RelNode unwrap(RelNode node) {
