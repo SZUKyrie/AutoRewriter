@@ -100,7 +100,7 @@ public class AutoRewriteRule extends RelOptRule {
 
     @Override
     public void onMatch(RelOptRuleCall call) {
-        log.debug("Rule[{}] matched, applying rewrite", ruleId);
+        log.info("Rule[{}] matched, applying rewrite", ruleId);
 
         try {
             RelNode queryNode = call.rel(0);

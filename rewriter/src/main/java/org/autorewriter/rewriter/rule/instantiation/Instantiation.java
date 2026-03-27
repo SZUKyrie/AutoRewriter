@@ -1,5 +1,6 @@
 package org.autorewriter.rewriter.rule.instantiation;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.*;
 import org.apache.calcite.rel.type.*;
@@ -29,6 +30,7 @@ import java.util.List;
  *   <li>{@link ColumnRefRegistry#resolveIndex} resolves column identity to position (like WeTune's rebindRefs)</li>
  * </ul>
  */
+@Slf4j
 public class Instantiation {
 
     private final Model model;
@@ -189,8 +191,12 @@ public class Instantiation {
 
         // Standard single-predicate filter instantiation
         RexNode condition = instantiateRexNode(templateCond, child);
-        if (condition == null) condition = templateCond;
+        if (condition == null) {
+            throw new IllegalStateException(
+                    String.format("instantiateRexNode failed, templateCond: %s", templateCond.toString()));
+        }
 
+        log.info("child: {}, condition: {}", child.explain(), condition.toString());
         RelNode result = LogicalFilter.create(child, condition);
 
         // Re-apply unmatched filters scoped to this filter's predicate symbol (virtualExpr).

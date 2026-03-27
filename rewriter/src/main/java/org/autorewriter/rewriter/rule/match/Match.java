@@ -339,7 +339,7 @@ public class Match {
         if (!match(template.getInput(), query.getInput(), model)) return false;
 
         // Match the filter condition
-        if (!matchRexNode(templateCond, query.getCondition(), query, model)) return false;
+        if (!matchRexNode(templateCond, query.getCondition(), template, query, model)) return false;
 
         return model.checkConstraints();
     }
@@ -464,7 +464,7 @@ public class Match {
 
         List<int[]> queryPairs = extractJoinKeyPairs(queryCond, qLeftFieldCount);
         if (queryPairs.isEmpty()) {
-            return matchRexNode(template.getCondition(), queryCond, query, model);
+            return matchRexNode(template.getCondition(), queryCond, template, query, model);
         }
 
         RelNode qLeftChild = unwrapHepVertex(flipped ? query.getRight() : query.getLeft());
@@ -577,9 +577,10 @@ public class Match {
 
     /**
      * Match a template RexNode against a query RexNode, binding symbols.
+     * The {@code templateOperator} provides template context for extracting attrs placeholders.
      * The {@code queryOperator} provides context for resolving column references.
      */
-    static boolean matchRexNode(RexNode template, RexNode query, RelNode queryOperator, Model model) {
+    static boolean matchRexNode(RexNode template, RexNode query, RelNode templateOperator, RelNode queryOperator, Model model) {
         if (template instanceof RexCall && query instanceof RexCall) {
             RexCall tCall = (RexCall) template;
             RexCall qCall = (RexCall) query;
@@ -600,14 +601,15 @@ public class Match {
                 List<ColumnRef> columnRefs = collectColumnRefs(query, resolveTarget);
 
                 // Find the attrs placeholder associated with this predicate
-                // from the template's operands (RexInputRef pointing to parent fields)
+                // from the template's operands (RexInputRef pointing to template filter's input fields)
+                RelNode templateResolveTarget = getFilterInput(templateOperator);
                 for (RexNode operand : tCall.getOperands()) {
                     if (operand instanceof RexInputRef) {
                         int fieldIdx = ((RexInputRef) operand).getIndex();
-                        // Look up the field name in the operator's input (for filter, that's filter.getInput())
-                        List<String> fieldNames = resolveTarget.getRowType().getFieldNames();
-                        if (fieldIdx < fieldNames.size()) {
-                            String fieldName = fieldNames.get(fieldIdx);
+                        // Look up the field name in the TEMPLATE operator's input
+                        List<String> templateFieldNames = templateResolveTarget.getRowType().getFieldNames();
+                        if (fieldIdx < templateFieldNames.size()) {
+                            String fieldName = templateFieldNames.get(fieldIdx);
                             if (SymbolKind.isSymbolName(fieldName) && fieldName.charAt(0) == 'a') {
                                 Symbol attrsSym = Symbol.of(fieldName);
                                 if (!model.assign(attrsSym, columnRefs)) return false;
@@ -622,7 +624,7 @@ public class Match {
             if (!tCall.getOperator().equals(qCall.getOperator())) return false;
             if (tCall.getOperands().size() != qCall.getOperands().size()) return false;
             for (int i = 0; i < tCall.getOperands().size(); i++) {
-                if (!matchRexNode(tCall.getOperands().get(i), qCall.getOperands().get(i), queryOperator, model)) {
+                if (!matchRexNode(tCall.getOperands().get(i), qCall.getOperands().get(i), templateOperator, queryOperator, model)) {
                     return false;
                 }
             }
@@ -637,7 +639,7 @@ public class Match {
 
             if (tSub.getOperands().size() != qSub.getOperands().size()) return false;
             for (int i = 0; i < tSub.getOperands().size(); i++) {
-                if (!matchRexNode(tSub.getOperands().get(i), qSub.getOperands().get(i), queryOperator, model)) {
+                if (!matchRexNode(tSub.getOperands().get(i), qSub.getOperands().get(i), templateOperator, queryOperator, model)) {
                     return false;
                 }
             }

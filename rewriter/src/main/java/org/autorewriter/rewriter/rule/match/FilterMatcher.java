@@ -226,11 +226,11 @@ public class FilterMatcher {
                 matched = matchInSubPair(
                         (LogicalFilter) templateFilter, (LogicalInSubFilter) queryFilter, derived);
             } else {
-                // Pass queryFilter (not chain head) as context for correct _context storage
+                // Pass templateFilter and queryFilter for correct attrs placeholder extraction
                 matched = Match.matchRexNode(
                         ((LogicalFilter) templateFilter).getCondition(),
                         ((LogicalFilter) queryFilter).getCondition(),
-                        queryFilter, derived);
+                        templateFilter, queryFilter, derived);
             }
 
             boolean constraintOk = matched && derived.checkConstraints();
@@ -243,7 +243,7 @@ public class FilterMatcher {
                     Match.matchRexNode(
                             ((LogicalFilter) templateFilter).getCondition(),
                             ((LogicalFilter) queryFilter).getCondition(),
-                            queryFilter, model);
+                            templateFilter, queryFilter, model);
                 }
                 used[qi] = true;
                 if (assignFiltersByIndices(templateChain, queryChain, templateIndices, pos + 1, used, model)) {
@@ -287,14 +287,14 @@ public class FilterMatcher {
                 boolean matched = Match.matchRexNode(
                         ((LogicalFilter) templateFilter).getCondition(),
                         ((LogicalFilter) queryFilter).getCondition(),
-                        queryFilter, derived);
+                        templateFilter, queryFilter, derived);
 
                 if (matched && derived.checkConstraints()) {
                     // Replay into real model
                     Match.matchRexNode(
                             ((LogicalFilter) templateFilter).getCondition(),
                             ((LogicalFilter) queryFilter).getCondition(),
-                            queryFilter, model);
+                            templateFilter, queryFilter, model);
                     used[qi] = true;
                     foundMatch = true;
                     break;
