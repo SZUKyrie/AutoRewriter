@@ -58,7 +58,18 @@ public class NormalizeJoin {
             if (normalized != input) changed = true;
         }
         if (changed) {
-            node = node.copy(node.getTraitSet(), newInputs);
+            if (node instanceof org.apache.calcite.rel.logical.LogicalFilter && !newInputs.isEmpty()) {
+                org.apache.calcite.rel.logical.LogicalFilter filter =
+                    (org.apache.calcite.rel.logical.LogicalFilter) node;
+                RelNode newInput = newInputs.get(0);
+                RexNode condition = filter.getCondition();
+
+                // Rebuild condition with correct types
+                RexNode fixedCondition = fixRexTypes(condition, newInput);
+                node = org.apache.calcite.rel.logical.LogicalFilter.create(newInput, fixedCondition);
+            } else {
+                node = node.copy(node.getTraitSet(), newInputs);
+            }
         }
 
         // Only normalize Join nodes
@@ -67,6 +78,35 @@ public class NormalizeJoin {
         }
 
         return normalizeJoin((Join) node);
+    }
+
+    private RexNode fixRexTypes(RexNode expr, RelNode input) {
+        if (expr instanceof RexInputRef) {
+            RexInputRef ref = (RexInputRef) expr;
+            int idx = ref.getIndex();
+            if (idx < input.getRowType().getFieldCount()) {
+                return input.getCluster().getRexBuilder().makeInputRef(
+                    input.getRowType().getFieldList().get(idx).getType(), idx);
+            }
+            return ref;
+        }
+        if (expr instanceof org.apache.calcite.rex.RexSubQuery) {
+            org.apache.calcite.rex.RexSubQuery sub = (org.apache.calcite.rex.RexSubQuery) expr;
+            List<RexNode> newOps = new ArrayList<>();
+            for (RexNode op : sub.getOperands()) {
+                newOps.add(fixRexTypes(op, input));
+            }
+            return sub.clone(sub.rel).clone(sub.getType(), newOps);
+        }
+        if (expr instanceof org.apache.calcite.rex.RexCall) {
+            org.apache.calcite.rex.RexCall call = (org.apache.calcite.rex.RexCall) expr;
+            List<RexNode> newOps = new ArrayList<>();
+            for (RexNode op : call.getOperands()) {
+                newOps.add(fixRexTypes(op, input));
+            }
+            return input.getCluster().getRexBuilder().makeCall(call.getOperator(), newOps);
+        }
+        return expr;
     }
 
     /**
