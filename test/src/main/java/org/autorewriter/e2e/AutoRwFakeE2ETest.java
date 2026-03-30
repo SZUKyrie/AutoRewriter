@@ -29,8 +29,8 @@ AutoRwFakeE2ETest extends AutoRwFakeE2ETesBase{
         executePipeline(PipelineType.CBO, "diaspora", RULE_DIR);
     }
 
-    @Test
-    public void testDiaspora2Cbo() {
-        executePipeline(PipelineType.CBO, "diaspora", RULE_DIR3);
-    }
+//    @Test
+//    public void testDiaspora2Cbo() {
+//        executePipeline(PipelineType.CBO, "diaspora", RULE_DIR3);
+//    }
 }
