@@ -102,54 +102,50 @@ public class AutoRewriteRule extends RelOptRule {
     public void onMatch(RelOptRuleCall call) {
         log.info("Rule[{}] matched, applying rewrite", ruleId);
 
-        try {
-            RelNode queryNode = call.rel(0);
+        RelNode queryNode = call.rel(0);
 
-            // Reuse cached Model if available, otherwise fall back to re-matching
-            Model model = matchCache.remove(queryNode);
-            if (model == null) {
-                model = new Model(constraints);
-                if (!Match.match(sourceTemplate, queryNode, model)) {
-                    log.warn("Rule[{}] onMatch re-match failed unexpectedly", ruleId);
-                    return;
-                }
-                if (!model.checkConstraints()) {
-                    log.warn("Rule[{}] onMatch re-match constraints failed", ruleId);
-                    return;
-                }
-            }
-
-            RelNode rewrittenNode = Instantiation.instantiate(targetTemplate, model, constraints);
-
-            RelNode originalNode = call.rel(0);
-            RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
-
-            // Verify row type compatibility before transforming — Calcite's HepPlanner
-            // will throw if the field counts don't match
-            if (adjustedNode.getRowType().getFieldCount() != originalNode.getRowType().getFieldCount()) {
-                log.warn("Rule[{}] rewrite aborted: field count mismatch (expected {}, got {})",
-                        ruleId, originalNode.getRowType().getFieldCount(),
-                        adjustedNode.getRowType().getFieldCount());
+        // Reuse cached Model if available, otherwise fall back to re-matching
+        Model model = matchCache.remove(queryNode);
+        if (model == null) {
+            model = new Model(constraints);
+            if (!Match.match(sourceTemplate, queryNode, model)) {
+                log.warn("Rule[{}] onMatch re-match failed unexpectedly", ruleId);
                 return;
             }
-
-            // Verify output column identity preservation (WeTune-aligned).
-            // The rewritten plan must produce the same output columns as the original.
-            // This prevents over-matching where a stripped rule matches the wrong node
-            // (e.g., outer InSubFilter instead of inner) and corrupts the plan.
-            ColumnRefRegistry verifyRegistry = new ColumnRefRegistry();
-            List<ColumnRef> origCols = verifyRegistry.outputColumnsOf(originalNode);
-            List<ColumnRef> newCols = verifyRegistry.outputColumnsOf(adjustedNode);
-            if (!origCols.equals(newCols)) {
-                log.info("Rule[{}] rewrite aborted: output columns changed {} -> {}",
-                        ruleId, origCols, newCols);
+            if (!model.checkConstraints()) {
+                log.warn("Rule[{}] onMatch re-match constraints failed", ruleId);
                 return;
             }
-
-            call.transformTo(adjustedNode);
-        } catch (Exception e) {
-            log.warn("Rule[{}] rewrite failed: {}", ruleId, e.getMessage(), e);
         }
+
+        RelNode rewrittenNode = Instantiation.instantiate(targetTemplate, model, constraints, call.rel(0).getCluster());
+
+        RelNode originalNode = call.rel(0);
+        RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
+
+        // Verify row type compatibility before transforming — Calcite's HepPlanner
+        // will throw if the field counts don't match
+        if (adjustedNode.getRowType().getFieldCount() != originalNode.getRowType().getFieldCount()) {
+            log.warn("Rule[{}] rewrite aborted: field count mismatch (expected {}, got {})",
+                    ruleId, originalNode.getRowType().getFieldCount(),
+                    adjustedNode.getRowType().getFieldCount());
+            return;
+        }
+
+        // Verify output column identity preservation (WeTune-aligned).
+        // The rewritten plan must produce the same output columns as the original.
+        // This prevents over-matching where a stripped rule matches the wrong node
+        // (e.g., outer InSubFilter instead of inner) and corrupts the plan.
+        ColumnRefRegistry verifyRegistry = new ColumnRefRegistry();
+        List<ColumnRef> origCols = verifyRegistry.outputColumnsOf(originalNode);
+        List<ColumnRef> newCols = verifyRegistry.outputColumnsOf(adjustedNode);
+        if (!origCols.equals(newCols)) {
+            log.info("Rule[{}] rewrite aborted: output columns changed {} -> {}",
+                    ruleId, origCols, newCols);
+            return;
+        }
+
+        call.transformTo(adjustedNode);
     }
 
     private RelNode adjustRowType(RelNode node, RelDataType expectedType) {

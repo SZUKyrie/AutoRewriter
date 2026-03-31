@@ -1,6 +1,7 @@
 package org.autorewriter.rewriter.rule.instantiation;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.*;
 import org.apache.calcite.rel.type.*;
@@ -43,10 +44,13 @@ public class Instantiation {
         this.registry = new ColumnRefRegistry();
     }
 
-    public static RelNode instantiate(RelNode targetTemplate, Model model, Constraints constraints) {
+    public static RelNode instantiate(RelNode targetTemplate, Model model, Constraints constraints, RelOptCluster targetCluster) {
         RelNode result = new Instantiation(model, constraints).instantiateNode(targetTemplate);
-        // Normalize join trees to left-deep form (WeTune's normalizePlan → normalizeJoin)
-        result = new NormalizeJoin().normalize(result);
+        // Rebuild the entire tree using LogicalXxx.create() to produce fresh nodes
+        // without VolcanoPlanner registration state. Nodes from Model (bound during
+        // matching) carry rel# IDs from the planner; reusing them in a new tree
+        // causes "belongs to a different planner" errors in CBO mode.
+        result = rebuildFreshTree(result, targetCluster);
         return result;
     }
 
@@ -783,5 +787,148 @@ public class Instantiation {
                 }
             }
         }
+    }
+
+    /**
+     * Rebuild the entire RelNode tree using {@code LogicalXxx.create()} to produce
+     * fresh nodes without any VolcanoPlanner registration state (no {@code rel#} IDs).
+     *
+     * <p>During matching, query sub-trees are stored in the Model. These nodes are
+     * already registered in the VolcanoPlanner (they have {@code rel#} IDs). When
+     * Instantiation reuses them in a new tree, {@code call.transformTo()} tries to
+     * register the new tree but finds child nodes that are already registered,
+     * triggering "belongs to a different planner" errors.
+     *
+     * <p>This method creates a completely fresh copy of the tree where every node
+     * is newly created via its static {@code create()} factory method, ensuring no
+     * pre-existing planner registration.
+     */
+    static RelNode rebuildFreshTree(RelNode node, RelOptCluster targetCluster) {
+        // Unwrap VolcanoPlanner's RelSubset and HepPlanner's HepRelVertex
+        node = unwrapPlannerNode(node);
+
+        // Recursively rebuild children first
+        List<RelNode> freshInputs = new ArrayList<>();
+        for (RelNode input : node.getInputs()) {
+            freshInputs.add(rebuildFreshTree(input, targetCluster));
+        }
+
+        RexBuilder rexBuilder = targetCluster.getRexBuilder();
+
+        if (node instanceof LogicalTableScan) {
+            LogicalTableScan scan = (LogicalTableScan) node;
+            return LogicalTableScan.create(targetCluster, scan.getTable(), scan.getHints());
+        }
+        if (node instanceof LogicalFilter) {
+            LogicalFilter filter = (LogicalFilter) node;
+            RelNode newInput = freshInputs.get(0);
+            RexNode newCond = rebuildRex(filter.getCondition(), rexBuilder, targetCluster, newInput);
+            return LogicalFilter.create(newInput, newCond);
+        }
+        if (node instanceof LogicalProject) {
+            LogicalProject proj = (LogicalProject) node;
+            RelNode newInput = freshInputs.get(0);
+            List<RexNode> newProjects = new ArrayList<>();
+            for (RexNode expr : proj.getProjects()) {
+                newProjects.add(rebuildRex(expr, rexBuilder, targetCluster, newInput));
+            }
+            return LogicalProject.create(newInput, Collections.emptyList(),
+                    newProjects, proj.getRowType().getFieldNames());
+        }
+        if (node instanceof LogicalJoin) {
+            LogicalJoin join = (LogicalJoin) node;
+            RelNode newLeft = freshInputs.get(0);
+            RelNode newRight = freshInputs.get(1);
+            RexNode newCond = rebuildRex(join.getCondition(), rexBuilder, targetCluster, newLeft, newRight);
+            return LogicalJoin.create(newLeft, newRight, Collections.emptyList(),
+                    newCond, Collections.emptySet(), join.getJoinType());
+        }
+        if (node instanceof LogicalAggregate) {
+            LogicalAggregate agg = (LogicalAggregate) node;
+            return LogicalAggregate.create(freshInputs.get(0), agg.getGroupSet(),
+                    agg.getGroupSets(), agg.getAggCallList());
+        }
+        if (node instanceof LogicalSort) {
+            LogicalSort sort = (LogicalSort) node;
+            return LogicalSort.create(freshInputs.get(0),
+                    sort.getCollation(), sort.offset, sort.fetch);
+        }
+        if (node instanceof LogicalInSubFilter) {
+            LogicalInSubFilter inSub = (LogicalInSubFilter) node;
+            RelNode newLeft = freshInputs.get(0);
+            RelNode newRight = freshInputs.get(1);
+            RexNode newLhsRef = rebuildRex(inSub.getLhsRef(), rexBuilder, targetCluster, newLeft);
+            return LogicalInSubFilter.create(newLeft, newRight, newLhsRef);
+        }
+
+        // Fallback
+        if (!freshInputs.isEmpty()) {
+            return node.copy(node.getTraitSet(), freshInputs);
+        }
+        return node;
+    }
+
+    /**
+     * Rebuild a RexNode using the given RexBuilder, resolving RexInputRef types
+     * from the combined row type of the input nodes.
+     *
+     * @param expr       the expression to rebuild
+     * @param rexBuilder the RexBuilder to use
+     * @param targetCluster the target cluster for rebuilding subqueries
+     * @param inputs     the input nodes whose row types determine RexInputRef types
+     *                   (single node for Filter/Project, left+right for Join)
+     */
+    private static RexNode rebuildRex(RexNode expr, RexBuilder rexBuilder, RelOptCluster targetCluster, RelNode... inputs) {
+        if (expr instanceof RexInputRef) {
+            int idx = ((RexInputRef) expr).getIndex();
+            int offset = 0;
+            for (RelNode input : inputs) {
+                int fieldCount = input.getRowType().getFieldCount();
+                if (idx - offset < fieldCount) {
+                    return rexBuilder.makeInputRef(
+                            input.getRowType().getFieldList().get(idx - offset).getType(), idx);
+                }
+                offset += fieldCount;
+            }
+            return expr;
+        }
+        // RexSubQuery extends RexCall — must check before RexCall
+        if (expr instanceof RexSubQuery) {
+            RexSubQuery sub = (RexSubQuery) expr;
+            List<RexNode> newOps = new ArrayList<>();
+            for (RexNode op : sub.getOperands()) {
+                newOps.add(rebuildRex(op, rexBuilder, targetCluster, inputs));
+            }
+            RelNode newRel = rebuildFreshTree(sub.rel, targetCluster);
+            // First clone with new operands, then clone with new rel
+            RexSubQuery withNewOps = (RexSubQuery) sub.clone(sub.getType(), newOps);
+            return withNewOps.clone(newRel);
+        }
+        if (expr instanceof RexCall) {
+            RexCall call = (RexCall) expr;
+            List<RexNode> newOps = new ArrayList<>();
+            for (RexNode op : call.getOperands()) {
+                newOps.add(rebuildRex(op, rexBuilder, targetCluster, inputs));
+            }
+            return call.clone(call.getType(), newOps);
+        }
+        return expr;
+    }
+
+    /**
+     * Unwrap planner wrapper nodes (RelSubset from VolcanoPlanner, HepRelVertex
+     * from HepPlanner) to get the underlying logical node.
+     */
+    private static RelNode unwrapPlannerNode(RelNode node) {
+        while (node instanceof org.apache.calcite.plan.hep.HepRelVertex) {
+            node = ((org.apache.calcite.plan.hep.HepRelVertex) node).getCurrentRel();
+        }
+        if (node instanceof org.apache.calcite.plan.volcano.RelSubset) {
+            RelNode original = ((org.apache.calcite.plan.volcano.RelSubset) node).getOriginal();
+            if (original != null) {
+                return unwrapPlannerNode(original);
+            }
+        }
+        return node;
     }
 }

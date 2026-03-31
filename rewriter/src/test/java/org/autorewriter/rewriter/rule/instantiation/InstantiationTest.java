@@ -158,7 +158,7 @@ class InstantiationTest {
         RelNode targetTemplate = templateBuilder.scan("t1").build();
 
         // Instantiate
-        RelNode result = Instantiation.instantiate(targetTemplate, model, constraints);
+        RelNode result = Instantiation.instantiate(targetTemplate, model, constraints, targetTemplate.getCluster());
 
         // Verify: result should be the customers scan
         assertNotNull(result, "Result should not be null");
@@ -251,7 +251,7 @@ class InstantiationTest {
                 .build();
 
         // Instantiate
-        RelNode result = Instantiation.instantiate(targetTemplate, model, constraints);
+        RelNode result = Instantiation.instantiate(targetTemplate, model, constraints, targetTemplate.getCluster());
 
         // Verify: result should be a LogicalProject
         assertNotNull(result, "Result should not be null");
@@ -342,7 +342,7 @@ class InstantiationTest {
                 .build();
 
         // Instantiate
-        RelNode result = Instantiation.instantiate(targetTemplate, model, constraints);
+        RelNode result = Instantiation.instantiate(targetTemplate, model, constraints, targetTemplate.getCluster());
 
         // Verify: result should be a LogicalFilter
         assertNotNull(result, "Result should not be null");
@@ -442,7 +442,7 @@ class InstantiationTest {
                 .build();
 
         // Instantiate
-        RelNode result = Instantiation.instantiate(targetTemplate, model, constraints);
+        RelNode result = Instantiation.instantiate(targetTemplate, model, constraints, targetTemplate.getCluster());
 
         // Verify: result should be a LogicalJoin
         assertNotNull(result, "Result should not be null");

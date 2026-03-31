@@ -782,7 +782,7 @@ public class WeTuneStyleRewriteTest {
 
             // Instantiate target template
             RelNode result = org.autorewriter.rewriter.rule.instantiation.Instantiation.instantiate(
-                    ctx.getTargetRelNode(), model, constraints);
+                    ctx.getTargetRelNode(), model, constraints, ctx.getTargetRelNode().getCluster());
             assertNotNull(result);
 
             // Verify: 2 filter layers (1 matched + 1 virtualExpr)
@@ -842,7 +842,7 @@ public class WeTuneStyleRewriteTest {
                     "No virtualExpr should be stored when filter counts match");
 
             RelNode result = org.autorewriter.rewriter.rule.instantiation.Instantiation.instantiate(
-                    ctx.getTargetRelNode(), model, constraints);
+                    ctx.getTargetRelNode(), model, constraints, ctx.getTargetRelNode().getCluster());
             assertNotNull(result);
 
             assertEquals(1, countFilterLayers(result),
