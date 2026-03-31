@@ -201,10 +201,11 @@ public class Instantiation {
         }
 
         log.info("child: {}, condition: {}", child.explain(), condition.toString());
+        condition = fixRexTypes(condition, child);
         RelNode result = LogicalFilter.create(child, condition);
 
         // Re-apply unmatched filters scoped to this filter's predicate symbol (virtualExpr).
-        result = applyVirtualExprs(templateCond, result);
+        result = applyVirtualExprs(condition, result);
 
         return result;
     }
@@ -681,12 +682,11 @@ public class Instantiation {
     private RexNode rebindPredicateRefs(RexNode expr, RelNode sourceCtx, RelNode targetCtx) {
         if (expr instanceof RexInputRef) {
             int oldIdx = ((RexInputRef) expr).getIndex();
-            // Use registry for consistent resolution
             List<ColumnRef> sourceCols = registry.outputColumnsOf(sourceCtx);
             if (oldIdx < sourceCols.size()) {
                 ColumnRef ref = sourceCols.get(oldIdx);
                 int newIdx = registry.resolveIndex(ref, targetCtx);
-                if (newIdx >= 0) {
+                if (newIdx >= 0 && newIdx < targetCtx.getRowType().getFieldCount()) {
                     RexBuilder rexBuilder = targetCtx.getCluster().getRexBuilder();
                     RelDataType newType = targetCtx.getRowType().getFieldList().get(newIdx).getType();
                     return rexBuilder.makeInputRef(newType, newIdx);
@@ -716,6 +716,39 @@ public class Instantiation {
     private static String getTableName(LogicalTableScan scan) {
         List<String> names = scan.getTable().getQualifiedName();
         return names.get(names.size() - 1);
+    }
+
+    /**
+     * Fix RexInputRef types to match the input node's row type.
+     * Recursively processes RexCall and RexSubQuery operands.
+     */
+    private static RexNode fixRexTypes(RexNode expr, RelNode input) {
+        if (expr instanceof RexInputRef) {
+            RexInputRef ref = (RexInputRef) expr;
+            int idx = ref.getIndex();
+            if (idx < input.getRowType().getFieldCount()) {
+                return input.getCluster().getRexBuilder().makeInputRef(
+                    input.getRowType().getFieldList().get(idx).getType(), idx);
+            }
+            return ref;
+        }
+        if (expr instanceof RexSubQuery) {
+            RexSubQuery sub = (RexSubQuery) expr;
+            List<RexNode> newOps = new ArrayList<>();
+            for (RexNode op : sub.getOperands()) {
+                newOps.add(fixRexTypes(op, input));
+            }
+            return sub.clone(sub.rel).clone(sub.getType(), newOps);
+        }
+        if (expr instanceof RexCall) {
+            RexCall call = (RexCall) expr;
+            List<RexNode> newOps = new ArrayList<>();
+            for (RexNode op : call.getOperands()) {
+                newOps.add(fixRexTypes(op, input));
+            }
+            return input.getCluster().getRexBuilder().makeCall(call.getOperator(), newOps);
+        }
+        return expr;
     }
 
     private static int findFieldByName(RelNode node, String name) {

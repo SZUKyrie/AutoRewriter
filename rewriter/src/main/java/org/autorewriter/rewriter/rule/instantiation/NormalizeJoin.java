@@ -4,6 +4,7 @@ import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.JoinRelType;
+import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rel.logical.LogicalJoin;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexInputRef;
@@ -58,15 +59,14 @@ public class NormalizeJoin {
             if (normalized != input) changed = true;
         }
         if (changed) {
-            if (node instanceof org.apache.calcite.rel.logical.LogicalFilter && !newInputs.isEmpty()) {
-                org.apache.calcite.rel.logical.LogicalFilter filter =
-                    (org.apache.calcite.rel.logical.LogicalFilter) node;
+            if (node instanceof LogicalFilter && !newInputs.isEmpty()) {
+                LogicalFilter filter = (LogicalFilter) node;
                 RelNode newInput = newInputs.get(0);
                 RexNode condition = filter.getCondition();
 
                 // Rebuild condition with correct types
                 RexNode fixedCondition = fixRexTypes(condition, newInput);
-                node = org.apache.calcite.rel.logical.LogicalFilter.create(newInput, fixedCondition);
+                node = LogicalFilter.create(newInput, fixedCondition);
             } else {
                 node = node.copy(node.getTraitSet(), newInputs);
             }
@@ -80,7 +80,7 @@ public class NormalizeJoin {
         return normalizeJoin((Join) node);
     }
 
-    private RexNode fixRexTypes(RexNode expr, RelNode input) {
+    public static RexNode fixRexTypes(RexNode expr, RelNode input) {
         if (expr instanceof RexInputRef) {
             RexInputRef ref = (RexInputRef) expr;
             int idx = ref.getIndex();

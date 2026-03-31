@@ -13,4 +13,9 @@ public class AutoRwFakeE2ETest2 extends RewritePathE2ETest {
     public void testDiapora2() {
         executePipeline(PipelineType.MANUAL, "diaspora", RULE_DIR3);
     }
+
+    @Test
+    public void testDiasporaCboFullRules() {
+        executePipeline(PipelineType.CBO, "diaspora", RULE_DIR);
+    }
 }
