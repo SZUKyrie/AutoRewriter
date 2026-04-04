@@ -140,11 +140,6 @@ public class CostBaseOptimizer implements BaseOptimizer {
                                 DefaultRelMetadataProvider.INSTANCE
                         ))));
 
-        // Replace the planner on the existing cluster.
-        // The RelNode was created by SqlAnalyzer with a different planner (from
-        // MultiDialectPlanner). We need to inject our VolcanoPlanner into the shared
-        // RelOptCluster. This reflection hack is fragile on Java 16+ where
-        // setAccessible may be restricted.
         RelOptCluster cluster = root.getCluster();
         try {
             java.lang.reflect.Field plannerField =
@@ -170,10 +165,6 @@ public class CostBaseOptimizer implements BaseOptimizer {
         // that RelToSqlConverter cannot handle.
         //bestPlan = SubQueryTreeResolver.resolve(bestPlan);
 
-        // Post-process: merge consecutive Filter nodes back into single AND-conjoined
-        // filters. FilterSplitter splits them before optimization for rule matching;
-        // FilterMerger reverses this to prevent RelToSqlConverter from generating
-        // nested subqueries for each individual predicate.
         bestPlan = FilterMerger.merge(bestPlan);
 
         log.info("CBO optimization completed, {} user rules + JDBC conversion rules registered",

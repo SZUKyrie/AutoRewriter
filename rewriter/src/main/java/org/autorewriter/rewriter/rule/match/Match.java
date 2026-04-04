@@ -330,7 +330,8 @@ public class Match {
         RelNode templateInput = unwrapHepVertex(template.getInput());
         RelNode queryInput = unwrapHepVertex(query.getInput());
         if (templateInput instanceof LogicalFilter || templateInput instanceof LogicalInSubFilter
-                || queryInput instanceof LogicalFilter || queryInput instanceof LogicalInSubFilter) {
+                || queryInput instanceof LogicalFilter || queryInput instanceof LogicalInSubFilter
+                || containsFilterAlternative(query.getInput())) {
             return FilterMatcher.matchFilterChain(template, query, model);
         }
 
@@ -784,5 +785,23 @@ public class Match {
             return unwrapHepVertex(((LogicalFilter) unwrapped).getInput());
         }
         return unwrapped;
+    }
+
+    /**
+     * Check if a RelNode (possibly a RelSubset) contains a LogicalFilter or
+     * LogicalInSubFilter alternative. This handles the VolcanoPlanner case where
+     * a filter chain's inner filter is wrapped in a RelSubset and getOriginal()
+     * may return a non-filter node (e.g., the InnerJoin that was registered first).
+     */
+    static boolean containsFilterAlternative(RelNode node) {
+        if (node instanceof RelSubset) {
+            for (RelNode rel : ((RelSubset) node).getRels()) {
+                if (rel instanceof RelSubset) continue;
+                if (rel instanceof LogicalFilter || rel instanceof LogicalInSubFilter) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

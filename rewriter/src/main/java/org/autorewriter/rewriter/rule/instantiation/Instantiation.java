@@ -44,8 +44,15 @@ public class Instantiation {
         this.registry = new ColumnRefRegistry();
     }
 
+    /**
+     * Instantiate a target template into a concrete RelNode tree.
+     *
+     * @return the instantiated RelNode, or {@code null} if instantiation fails
+     *         (e.g., foreign column references after table elimination)
+     */
     public static RelNode instantiate(RelNode targetTemplate, Model model, Constraints constraints, RelOptCluster targetCluster) {
         RelNode result = new Instantiation(model, constraints).instantiateNode(targetTemplate);
+        if (result == null) return null;
         // Rebuild the entire tree using LogicalXxx.create() to produce fresh nodes
         // without VolcanoPlanner registration state. Nodes from Model (bound during
         // matching) carry rel# IDs from the planner; reusing them in a new tree
@@ -100,6 +107,7 @@ public class Instantiation {
 
     private RelNode instantiateProject(LogicalProject template) {
         RelNode child = instantiateNode(template.getInput());
+        if (child == null) return null;
 
         // Find attrs and schema placeholders
         List<String> templateFields = template.getRowType().getFieldNames();
@@ -146,8 +154,9 @@ public class Instantiation {
                     RelDataType fieldType = child.getRowType().getFieldList().get(nameIdx).getType();
                     projects.add(rexBuilder.makeInputRef(fieldType, nameIdx));
                 } else {
-                    projects.add(rexBuilder.makeInputRef(
-                            child.getRowType().getFieldList().get(0).getType(), 0));
+                    // Column not found — foreign value (WeTune FAILURE_FOREIGN_VALUE)
+                    log.info("instantiateProject: column {} not resolvable in child", ref);
+                    return null;
                 }
             }
         }
@@ -174,6 +183,7 @@ public class Instantiation {
         }
 
         RelNode child = instantiateNode(template.getInput());
+        if (child == null) return null;
         RexNode templateCond = template.getCondition();
 
         // ShardingSphere parser may merge nested Filter<p3>(Filter<p2>(...)) into a single
@@ -189,6 +199,7 @@ public class Instantiation {
                 if (partCondition == null) partCondition = predParts.get(i);
                 result = LogicalFilter.create(result, partCondition);
                 result = applyVirtualExprs(predParts.get(i), result);
+                if (result == null) return null;  // foreign value in virtualExpr
             }
             return result;
         }
@@ -196,11 +207,9 @@ public class Instantiation {
         // Standard single-predicate filter instantiation
         RexNode condition = instantiateRexNode(templateCond, child);
         if (condition == null) {
-            throw new IllegalStateException(
-                    String.format("instantiateRexNode failed, templateCond: %s", templateCond.toString()));
+            return null;
         }
 
-        log.info("child: {}, condition: {}", child.explain(), condition.toString());
         condition = fixRexTypes(condition, child);
         RelNode result = LogicalFilter.create(child, condition);
 
@@ -235,8 +244,9 @@ public class Instantiation {
 
     private RelNode instantiateInSubFilter(LogicalFilter template) {
         RelNode child = instantiateNode(template.getInput());
+        if (child == null) return null;
         RexNode condition = instantiateRexNode(template.getCondition(), child);
-        if (condition == null) condition = template.getCondition();
+        if (condition == null) return null;  // subquery or predicate has foreign value
 
         // Produce LogicalInSubFilter to keep plan consistent with InSubFilterExpander
         RexSubQuery inSub = findInSubQuery(condition);
@@ -298,7 +308,8 @@ public class Instantiation {
      *
      * @param templateCondition the target template filter's condition (contains pred symbol)
      * @param result            the current instantiated node to wrap with extra filters
-     * @return the result with virtualExprs applied, or unchanged if none exist
+     * @return the result with virtualExprs applied, or {@code null} if any condition
+     *         references a foreign column that cannot be resolved in the target
      */
     @SuppressWarnings("unchecked")
     private RelNode applyVirtualExprs(RexNode templateCondition, RelNode result) {
@@ -326,9 +337,11 @@ public class Instantiation {
         // 4. Rebind each condition and wrap with LogicalFilter
         for (RexNode cond : conditions) {
             RexNode reboundCond = rebindPredicateRefs(cond, sourceContext, result);
-            if (reboundCond != null) {
-                result = LogicalFilter.create(result, reboundCond);
+            if (reboundCond == null) {
+                log.info("virtualExpr rebind failed: foreign column in condition {}", cond);
+                return null;
             }
+            result = LogicalFilter.create(result, reboundCond);
         }
         return result;
     }
@@ -353,6 +366,7 @@ public class Instantiation {
     private RelNode instantiateJoin(LogicalJoin template) {
         RelNode left = instantiateNode(template.getLeft());
         RelNode right = instantiateNode(template.getRight());
+        if (left == null || right == null) return null;
 
         // Wrap non-trivial join inputs with identity projections (WeTune NormalizeProj).
         // This establishes clean column namespaces for each join side AND prevents
@@ -535,6 +549,7 @@ public class Instantiation {
 
     private RelNode instantiateAggregate(LogicalAggregate template) {
         RelNode child = instantiateNode(template.getInput());
+        if (child == null) return null;
 
         List<String> templateFields = template.getRowType().getFieldNames();
         ImmutableBitSet groupSet = template.getGroupSet();
@@ -617,6 +632,7 @@ public class Instantiation {
         if (template instanceof RexSubQuery) {
             RexSubQuery sub = (RexSubQuery) template;
             RelNode newRel = instantiateNode(sub.rel);
+            if (newRel == null) return null;  // subquery child has foreign value
             List<RexNode> newOperands = new ArrayList<>();
             for (RexNode operand : sub.getOperands()) {
                 RexNode inst = instantiateRexNode(operand, context);
@@ -678,6 +694,10 @@ public class Instantiation {
     /**
      * Rebind predicate RexInputRef indices from source context to target context
      * using the ColumnRefRegistry.
+     *
+     * <p>Returns {@code null} if any RexInputRef cannot be resolved in the target
+     * context (WeTune's FAILURE_FOREIGN_VALUE equivalent). This happens when a
+     * rewrite eliminates a table whose columns are still referenced by predicates.
      */
     private RexNode rebindPredicateRefs(RexNode expr, RelNode sourceCtx, RelNode targetCtx) {
         if (expr instanceof RexInputRef) {
@@ -692,7 +712,8 @@ public class Instantiation {
                     return rexBuilder.makeInputRef(newType, newIdx);
                 }
             }
-            return expr;
+            // Column not found in target — foreign value
+            return null;
         }
         if (expr instanceof RexSubQuery) {
             return expr;  // subquery operands reference their own context
@@ -703,6 +724,7 @@ public class Instantiation {
             boolean changed = false;
             for (RexNode operand : call.getOperands()) {
                 RexNode rebound = rebindPredicateRefs(operand, sourceCtx, targetCtx);
+                if (rebound == null) return null;  // propagate failure
                 newOperands.add(rebound);
                 if (rebound != operand) changed = true;
             }

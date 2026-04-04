@@ -65,6 +65,12 @@ public class ManualProducePipeline extends ProducePipeline {
                     sourceTemplate, ruleContext.getTargetRelNode(),
                     ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());
 
+            // Skip no-op rules: source and target have the same structure,
+            // so applying the rule produces an identical plan → infinite loop.
+            if (expandedContext.isNoOp()) {
+                continue;
+            }
+
             // Register original rule
             Class<? extends RelNode> rootClass =
                     (Class<? extends RelNode>) expandedContext.getSourceRelNode().getClass();

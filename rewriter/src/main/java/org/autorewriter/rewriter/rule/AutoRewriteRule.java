@@ -18,8 +18,6 @@ import org.autorewriter.rewriter.rule.match.Match;
 import org.autorewriter.rewriter.rule.model.Model;
 import org.autorewriter.rewriter.rule.symbol.Symbol;
 import org.autorewriter.rewriter.rule.symbol.SymbolExtractor;
-import org.autorewriter.rewriter.rule.util.ColumnRef;
-import org.autorewriter.rewriter.rule.util.ColumnRefRegistry;
 
 import java.util.*;
 
@@ -80,13 +78,13 @@ public class AutoRewriteRule extends RelOptRule {
         Model model = new Model(constraints);
 
         if (!Match.match(sourceTemplate, queryNode, model)) {
-            //log.info("Rule[{}] match failed: structure does not match", ruleId);
+            log.debug("Rule[{}] match failed: structure does not match", ruleId);
             return false;
         }
 
         // Check all constraints (ATTRS_SUB, UNIQUE, NOT_NULL, REFERENCE)
         if (!model.checkConstraints()) {
-            log.info("Rule[{}] match failed: constraints not satisfied", ruleId);
+            log.debug("Rule[{}] match failed: constraints not satisfied", ruleId);
             return false;
         }
 
@@ -120,34 +118,33 @@ public class AutoRewriteRule extends RelOptRule {
 
         RelNode rewrittenNode = Instantiation.instantiate(targetTemplate, model, constraints, call.rel(0).getCluster());
 
-        RelNode originalNode = call.rel(0);
-        RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
-
-        // Verify row type compatibility before transforming — Calcite's HepPlanner
-        // will throw if the field counts don't match
-        if (adjustedNode.getRowType().getFieldCount() != originalNode.getRowType().getFieldCount()) {
-            log.warn("Rule[{}] rewrite aborted: field count mismatch (expected {}, got {})",
-                    ruleId, originalNode.getRowType().getFieldCount(),
-                    adjustedNode.getRowType().getFieldCount());
+        // Instantiation returns null when column references can't be resolved in the
+        // target plan (WeTune's FAILURE_FOREIGN_VALUE). This happens when a rewrite
+        // eliminates a table whose columns are still referenced by predicates or projections.
+        if (rewrittenNode == null) {
+            log.info("Rule[{}] rewrite aborted: instantiation failed (foreign value)", ruleId);
             return;
         }
 
-        // Verify output column identity preservation (WeTune-aligned).
-        // The rewritten plan must produce the same output columns as the original.
-        // This prevents over-matching where a stripped rule matches the wrong node
-        // (e.g., outer InSubFilter instead of inner) and corrupts the plan.
-        ColumnRefRegistry verifyRegistry = new ColumnRefRegistry();
-        List<ColumnRef> origCols = verifyRegistry.outputColumnsOf(originalNode);
-        List<ColumnRef> newCols = verifyRegistry.outputColumnsOf(adjustedNode);
-        if (!origCols.equals(newCols)) {
-            log.info("Rule[{}] rewrite aborted: output columns changed {} -> {}",
-                    ruleId, origCols, newCols);
+        RelNode originalNode = call.rel(0);
+        RelNode adjustedNode = adjustRowType(rewrittenNode, originalNode.getRowType());
+
+        // adjustRowType returns null when the rewritten plan has incompatible types
+        // (e.g., column order scrambled due to over-matching). Abort the rewrite.
+        if (adjustedNode == null) {
+            log.info("Rule[{}] rewrite aborted: row type incompatible", ruleId);
             return;
         }
 
         call.transformTo(adjustedNode);
     }
 
+    /**
+     * Adjust nullability of rewritten node's row type to match the original.
+     *
+     * @return the adjusted node, or {@code null} if types are incompatible
+     *         (indicating a semantically invalid rewrite that should be aborted)
+     */
     private RelNode adjustRowType(RelNode node, RelDataType expectedType) {
         RelDataType actualType = node.getRowType();
 
@@ -156,9 +153,9 @@ public class AutoRewriteRule extends RelOptRule {
         }
 
         if (actualType.getFieldCount() != expectedType.getFieldCount()) {
-            log.warn("Field count mismatch: expected {}, actual {}",
+            log.info("adjustRowType: field count mismatch (expected {}, actual {})",
                 expectedType.getFieldCount(), actualType.getFieldCount());
-            return node;
+            return null;
         }
 
         // Check if types are compatible (same base type, only nullability differs)
@@ -167,25 +164,15 @@ public class AutoRewriteRule extends RelOptRule {
             RelDataTypeField expectedField = expectedType.getFieldList().get(i);
             RelDataTypeField actualField = actualType.getFieldList().get(i);
 
-            // Get base types without nullability
-            RelDataType expectedBase = expectedField.getType();
-            RelDataType actualBase = actualField.getType();
-
-            // Check if base types are the same (ignoring nullability)
-            if (expectedBase.getSqlTypeName() != actualBase.getSqlTypeName()) {
+            if (expectedField.getType().getSqlTypeName() != actualField.getType().getSqlTypeName()) {
                 onlyNullabilityDiffers = false;
-                log.warn("Type mismatch at field {}: expected {}, actual {}",
-                    i, expectedBase.getSqlTypeName(), actualBase.getSqlTypeName());
                 break;
             }
         }
 
-        // Only adjust if types are compatible
         if (!onlyNullabilityDiffers) {
-            log.warn("Cannot adjust row type: types are incompatible");
-            log.warn("Expected: {}", expectedType);
-            log.warn("Actual: {}", actualType);
-            return node;
+            log.info("adjustRowType: types are incompatible");
+            return null;
         }
 
         RexBuilder rexBuilder = node.getCluster().getRexBuilder();

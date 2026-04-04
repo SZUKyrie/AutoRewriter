@@ -437,6 +437,14 @@ public class FilterMatcher {
         RelNode current = head;
         while (true) {
             current = Match.unwrapHepVertex(current);
+            // In VolcanoPlanner, child nodes may be wrapped in RelSubset.
+            // If unwrapHepVertex returned a non-filter but the RelSubset contains
+            // a filter alternative, resolve to that filter for chain traversal.
+            if (!(current instanceof LogicalFilter) && !(current instanceof LogicalInSubFilter)
+                    && Match.containsFilterAlternative(current)) {
+                current = findFilterAlternative(current);
+                if (current == null) break;
+            }
             if (current instanceof LogicalFilter) {
                 LogicalFilter filter = (LogicalFilter) current;
                 // Check for parser-merged AND(p1, p0) compound predicate placeholders
@@ -458,6 +466,21 @@ public class FilterMatcher {
             }
         }
         return chain;
+    }
+
+    /**
+     * Find the first LogicalFilter or LogicalInSubFilter alternative in a RelSubset.
+     */
+    private static RelNode findFilterAlternative(RelNode node) {
+        if (node instanceof org.apache.calcite.plan.volcano.RelSubset) {
+            for (RelNode rel : ((org.apache.calcite.plan.volcano.RelSubset) node).getRels()) {
+                if (rel instanceof org.apache.calcite.plan.volcano.RelSubset) continue;
+                if (rel instanceof LogicalFilter || rel instanceof LogicalInSubFilter) {
+                    return rel;
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -490,6 +513,14 @@ public class FilterMatcher {
         RelNode current = head;
         while (true) {
             current = Match.unwrapHepVertex(current);
+            // Handle VolcanoPlanner's RelSubset: resolve to filter alternative if present
+            if (!(current instanceof LogicalFilter) && !(current instanceof LogicalInSubFilter)
+                    && Match.containsFilterAlternative(current)) {
+                RelNode filter = findFilterAlternative(current);
+                if (filter != null) {
+                    current = filter;
+                }
+            }
             if (current instanceof LogicalFilter) {
                 current = ((LogicalFilter) current).getInput();
             } else if (current instanceof LogicalInSubFilter) {
