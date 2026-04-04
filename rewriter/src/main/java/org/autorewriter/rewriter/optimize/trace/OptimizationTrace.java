@@ -298,12 +298,13 @@ public class OptimizationTrace {
     }
 
     private void enumerateOrderedSubsets(int n, int start, List<Integer> current, List<List<Integer>> result) {
-        if (start >= n) return;
+        if (start >= n || result.size() >= 1000) return;
         for (int i = start; i < n; i++) {
             current.add(i);
             result.add(new ArrayList<>(current));
             enumerateOrderedSubsets(n, i + 1, current, result);
             current.remove(current.size() - 1);
+            if (result.size() >= 1000) return;
         }
     }
 }

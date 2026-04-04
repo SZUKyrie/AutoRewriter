@@ -121,20 +121,6 @@ public class CostBaseOptimizer implements BaseOptimizer {
         // AbstractConverter expansion rule helps the planner bridge convention gaps
         planner.addRule(AbstractConverter.ExpandConversionRule.Config.DEFAULT.toRule());
 
-        // Logical transformation rules for join reordering
-        // Commutativity: A ⋈ B → B ⋈ A (including LEFT↔RIGHT)
-//        planner.addRule(CoreRules.JOIN_COMMUTE.config
-//                .as(JoinCommuteRule.Config.class)
-//                .withSwapOuter(true)
-//                .toRule()
-//        );
-        // Associativity: (A ⋈ B) ⋈ C → A ⋈ (B ⋈ C)
-        //planner.addRule(CoreRules.JOIN_ASSOCIATE);
-        // Push join conditions into children
-        //planner.addRule(CoreRules.JOIN_CONDITION_PUSH);
-        // Push transitive predicates through join
-        //planner.addRule(CoreRules.JOIN_PUSH_TRANSITIVE_PREDICATES);
-
         // Register user-added rules (logical transformations, AutoRewriteRules, etc.)
         for (RelOptRule rule : rules) {
             planner.addRule(rule);
@@ -182,7 +168,7 @@ public class CostBaseOptimizer implements BaseOptimizer {
         // plan tree via getInputs(); RexSubQuery.rel inside filter conditions
         // may still contain RelSubset wrappers and LogicalInSubFilter nodes
         // that RelToSqlConverter cannot handle.
-        bestPlan = SubQueryTreeResolver.resolve(bestPlan);
+        //bestPlan = SubQueryTreeResolver.resolve(bestPlan);
 
         // Post-process: merge consecutive Filter nodes back into single AND-conjoined
         // filters. FilterSplitter splits them before optimization for rule matching;

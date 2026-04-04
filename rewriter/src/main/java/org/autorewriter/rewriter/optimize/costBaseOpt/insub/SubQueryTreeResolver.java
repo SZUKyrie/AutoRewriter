@@ -10,7 +10,9 @@ import org.apache.calcite.rex.RexShuttle;
 import org.apache.calcite.rex.RexSubQuery;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Post-processor that resolves VolcanoPlanner-internal references in
@@ -44,11 +46,16 @@ public class SubQueryTreeResolver {
     }
 
     private static RelNode processNode(RelNode node) {
+        Map<Integer, RelNode> memo = new HashMap<>();
+        return processNode(node, memo);
+    }
+
+    private static RelNode processNode(RelNode node, Map<Integer, RelNode> memo) {
         // Process inputs first (depth-first)
         List<RelNode> newInputs = new ArrayList<>();
         boolean inputsChanged = false;
         for (RelNode input : node.getInputs()) {
-            RelNode processed = processNode(input);
+            RelNode processed = processNode(input, memo);
             newInputs.add(processed);
             if (processed != input) inputsChanged = true;
         }
@@ -59,7 +66,7 @@ public class SubQueryTreeResolver {
         // Resolve RexSubQuery in filter conditions
         if (node instanceof Filter) {
             Filter filter = (Filter) node;
-            RexNode newCondition = resolveRexSubQueries(filter.getCondition());
+            RexNode newCondition = resolveRexSubQueries(filter.getCondition(), memo);
             if (newCondition != filter.getCondition()) {
                 node = filter.copy(filter.getTraitSet(), filter.getInput(), newCondition);
             }
@@ -71,11 +78,11 @@ public class SubQueryTreeResolver {
     /**
      * Apply a RexShuttle that resolves RexSubQuery.rel trees.
      */
-    private static RexNode resolveRexSubQueries(RexNode rex) {
+    private static RexNode resolveRexSubQueries(RexNode rex, Map<Integer, RelNode> memo) {
         return rex.accept(new RexShuttle() {
             @Override
             public RexNode visitSubQuery(RexSubQuery subQuery) {
-                RelNode resolved = resolveRelTree(subQuery.rel);
+                RelNode resolved = resolveRelTree(subQuery.rel, memo);
                 if (resolved != subQuery.rel) {
                     return subQuery.clone(resolved);
                 }
@@ -93,7 +100,14 @@ public class SubQueryTreeResolver {
      *   <li>Resolve any nested {@code RexSubQuery} in filter conditions</li>
      * </ul>
      */
-    private static RelNode resolveRelTree(RelNode node) {
+    private static RelNode resolveRelTree(RelNode node, Map<Integer, RelNode> memo) {
+        int nodeId = node.getId();
+
+        // Return memoized result if already processed (handles DAG sharing)
+        if (memo.containsKey(nodeId)) {
+            return memo.get(nodeId);
+        }
+
         // Strip RelSubset → concrete node
         if (node instanceof RelSubset) {
             RelSubset subset = (RelSubset) node;
@@ -110,14 +124,16 @@ public class SubQueryTreeResolver {
             if (best == null) {
                 throw new RuntimeException("Cannot resolve empty RelSubset: " + subset);
             }
-            return resolveRelTree(best);
+            RelNode resolved = resolveRelTree(best, memo);
+            memo.put(nodeId, resolved);
+            return resolved;
         }
 
         // Recursively resolve inputs
         List<RelNode> newInputs = new ArrayList<>();
         boolean inputsChanged = false;
         for (RelNode input : node.getInputs()) {
-            RelNode resolved = resolveRelTree(input);
+            RelNode resolved = resolveRelTree(input, memo);
             newInputs.add(resolved);
             if (resolved != input) inputsChanged = true;
         }
@@ -140,12 +156,13 @@ public class SubQueryTreeResolver {
         // Resolve RexSubQuery in filter conditions (handles nested subqueries)
         if (node instanceof Filter) {
             Filter filter = (Filter) node;
-            RexNode newCondition = resolveRexSubQueries(filter.getCondition());
+            RexNode newCondition = resolveRexSubQueries(filter.getCondition(), memo);
             if (newCondition != filter.getCondition()) {
                 node = filter.copy(filter.getTraitSet(), filter.getInput(), newCondition);
             }
         }
 
+        memo.put(nodeId, node);
         return node;
     }
 }

@@ -77,7 +77,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
                         "_stripped"
                 );
                 optimizer.addRule(strippedRule);
-                log.info("Registered stripped DISTINCT rule variant for rule[{}]", i);
+                //log.info("Registered stripped DISTINCT rule variant for rule[{}]", i);
             }
         }
 
@@ -116,7 +116,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
                 optimizeResult.setOptimizationTimeInMs(optimizationTimeInMs);
                 optimizeResult.setOriginalRelNode(relNode);
             } else {
-                log.info("query {} is optimized by CBO.\n{}", historicalSqlRecord.getQueryId(), trace.derivationChains());
+                //log.info("query {} is optimized by CBO.\n{}", historicalSqlRecord.getQueryId(), trace.derivationChains());
                 log.info("optimized plan:\n{}", optimizedRelNode.explain());
                 log.info("optimized query:\n {}", relNodeToSql(optimizedRelNode));
                 optimizeResult.setRewritten(true);

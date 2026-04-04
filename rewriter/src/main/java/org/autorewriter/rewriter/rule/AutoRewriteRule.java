@@ -80,7 +80,7 @@ public class AutoRewriteRule extends RelOptRule {
         Model model = new Model(constraints);
 
         if (!Match.match(sourceTemplate, queryNode, model)) {
-            log.info("Rule[{}] match failed: structure does not match", ruleId);
+            //log.info("Rule[{}] match failed: structure does not match", ruleId);
             return false;
         }
 
@@ -90,7 +90,7 @@ public class AutoRewriteRule extends RelOptRule {
             return false;
         }
 
-        log.info("Rule[{}] match succeeded", ruleId);
+        //log.info("Rule[{}] match succeeded", ruleId);
 
         // Cache for onMatch() and assertion re-check
         matchCache.put(queryNode, model);
