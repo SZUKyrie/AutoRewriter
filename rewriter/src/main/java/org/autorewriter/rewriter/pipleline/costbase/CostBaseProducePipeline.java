@@ -42,24 +42,22 @@ public class CostBaseProducePipeline extends ProducePipeline {
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
         for (int i = 0; i < ruleContexts.size(); i++) {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);
+            if (ruleContext.isNoOp()) {
+                continue;
+            }
 
             // Preprocess the source template: convert Filter(IN subquery) to
             // LogicalInSubFilter so it matches the query plan structure after
             // InSubFilterExpander preprocessing in CostBaseOptimizer.
             RelNode sourceTemplate = InSubFilterExpander.expand(ruleContext.getSourceRelNode());
+            RelNode targetTemplate = InSubFilterExpander.expand(ruleContext.getTargetRelNode());
             RuleAnalysisContext expandedContext = new RuleAnalysisContext(
-                    sourceTemplate, ruleContext.getTargetRelNode(),
-                    ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());
-
-            // Skip no-op rules: source and target have the same structure,
-            // so applying the rule produces an identical plan → infinite loop.
-            if (expandedContext.isNoOp()) {
-                continue;
-            }
+                    sourceTemplate, targetTemplate,
+                    ruleContext.getMatchConstraints(),
+                    ruleContext.getRewriteConstraints());
 
             // Register original rule
-            Class<? extends RelNode> rootClass =
-                    (Class<? extends RelNode>) expandedContext.getSourceRelNode().getClass();
+            Class<? extends RelNode> rootClass = expandedContext.getSourceRelNode().getClass();
             AutoRewriteRule rule = new AutoRewriteRule(
                     RelOptRule.operand(rootClass, RelOptRule.any()),
                     expandedContext,
@@ -67,10 +65,6 @@ public class CostBaseProducePipeline extends ProducePipeline {
             );
             optimizer.addRule(rule);
 
-            // Register stripped version if source root is DISTINCT Aggregate.
-            // This handles queries where Calcite elided LogicalAggregate because
-            // the table's PK already guarantees uniqueness (RelBuilder.distinct()
-            // checks areColumnsUnique and skips Aggregate creation).
             if (DistinctAggregateStripper.isDistinctAggregate(sourceTemplate)) {
                 RuleAnalysisContext strippedContext =
                         DistinctAggregateStripper.stripBoth(expandedContext);

@@ -52,11 +52,9 @@ public class Instantiation {
      */
     public static RelNode instantiate(RelNode targetTemplate, Model model, Constraints constraints, RelOptCluster targetCluster) {
         RelNode result = new Instantiation(model, constraints).instantiateNode(targetTemplate);
-        if (result == null) return null;
-        // Rebuild the entire tree using LogicalXxx.create() to produce fresh nodes
-        // without VolcanoPlanner registration state. Nodes from Model (bound during
-        // matching) carry rel# IDs from the planner; reusing them in a new tree
-        // causes "belongs to a different planner" errors in CBO mode.
+        if (result == null) {
+            return null;
+        }
         result = rebuildFreshTree(result, targetCluster);
         return result;
     }
@@ -78,6 +76,9 @@ public class Instantiation {
         }
         if (template instanceof LogicalAggregate) {
             return instantiateAggregate((LogicalAggregate) template);
+        }
+        if (template instanceof LogicalInSubFilter) {
+            return instantiateInSubFilterNode((LogicalInSubFilter) template);
         }
         return template;
     }
@@ -287,6 +288,40 @@ public class Instantiation {
             return inSubFilter;
         }
         return LogicalFilter.create(child, condition);
+    }
+
+    /**
+     * Instantiate a target template that is already a {@link LogicalInSubFilter}
+     */
+    private RelNode instantiateInSubFilterNode(LogicalInSubFilter template) {
+        // 1. Recursively instantiate both children
+        RelNode left = instantiateNode(template.getLeft());
+        RelNode right = instantiateNode(template.getRight());
+        if (left == null || right == null) return null;
+
+        // 2. Resolve lhsRef: map template's $N → attrs symbol → actual column index
+        RexNode lhsRef = template.getLhsRef();
+        if (lhsRef instanceof RexInputRef) {
+            int templateIdx = ((RexInputRef) lhsRef).getIndex();
+            RelNode templateLeft = Match.unwrapHepVertex(template.getLeft());
+            List<String> templateFields = templateLeft.getRowType().getFieldNames();
+            if (templateIdx < templateFields.size()) {
+                String symName = templateFields.get(templateIdx);
+                if (SymbolKind.isSymbolName(symName) && symName.charAt(0) == 'a') {
+                    List<ColumnRef> refs = interpretAttrs(Symbol.of(symName));
+                    if (refs != null && !refs.isEmpty()) {
+                        int newIdx = registry.resolveIndex(refs.get(0), left);
+                        if (newIdx >= 0) {
+                            RexBuilder rb = left.getCluster().getRexBuilder();
+                            lhsRef = rb.makeInputRef(
+                                    left.getRowType().getFieldList().get(newIdx).getType(), newIdx);
+                        }
+                    }
+                }
+            }
+        }
+
+        return LogicalInSubFilter.create(left, right, lhsRef);
     }
 
     /**

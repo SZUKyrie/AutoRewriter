@@ -60,16 +60,11 @@ public class ManualProducePipeline extends ProducePipeline {
             // Preprocess source template: aligned with CostBaseProducePipeline
             //System.out.println("[Template " + i + " BEFORE expand]\n" + ruleContext.getSourceRelNode().explain());
             RelNode sourceTemplate = InSubFilterExpander.expand(ruleContext.getSourceRelNode());
+            RelNode targetTemplate = InSubFilterExpander.expand(ruleContext.getTargetRelNode());
             //System.out.println("[Template " + i + " AFTER expand]\n" + sourceTemplate.explain());
             RuleAnalysisContext expandedContext = new RuleAnalysisContext(
-                    sourceTemplate, ruleContext.getTargetRelNode(),
+                    sourceTemplate, targetTemplate,
                     ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());
-
-            // Skip no-op rules: source and target have the same structure,
-            // so applying the rule produces an identical plan → infinite loop.
-            if (expandedContext.isNoOp()) {
-                continue;
-            }
 
             // Register original rule
             Class<? extends RelNode> rootClass =
