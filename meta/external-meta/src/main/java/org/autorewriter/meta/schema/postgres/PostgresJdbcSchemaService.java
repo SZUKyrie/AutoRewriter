@@ -1,11 +1,14 @@
 package org.autorewriter.meta.schema.postgres;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.calcite.rel.RelReferentialConstraint;
+import org.apache.calcite.rel.RelReferentialConstraintImpl;
 import org.apache.calcite.rel.type.*;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.util.Util;
 import org.apache.calcite.util.ImmutableBitSet;
+import org.apache.calcite.util.mapping.IntPair;
 import org.autorewriter.common.constant.DataTypeConstants;
 import org.autorewriter.common.entity.Column;
 import org.autorewriter.common.entity.ColumnDataType;
@@ -69,8 +72,9 @@ public class PostgresJdbcSchemaService extends AbstractSchemaService {
             colIndexMap.put(fieldList.get(i).getName().toLowerCase(), i);
         }
         List<ImmutableBitSet> uniqueKeys = readUniqueKeys(schema, tableName, colIndexMap);
+        List<RelReferentialConstraint> fks = readForeignKeys(schema, tableName, qualifiedTableName, colIndexMap);
 
-        return new PostgresTable(qualifiedTableName, fieldList, uniqueKeys);
+        return new PostgresTable(qualifiedTableName, fieldList, uniqueKeys, fks);
     }
 
     private List<ImmutableBitSet> readUniqueKeys(String schema, String tableName,
@@ -109,6 +113,83 @@ public class PostgresJdbcSchemaService extends AbstractSchemaService {
             log.warn("readUniqueKeys: failed for {}.{}: {}", schema, tableName, e.getMessage());
         }
         return result;
+    }
+
+    /**
+     * Read foreign key constraints from JDBC metadata.
+     * Groups by FK_NAME and builds RelReferentialConstraint for each FK.
+     */
+    private List<RelReferentialConstraint> readForeignKeys(
+            String schema, String tableName,
+            List<String> sourceQualifiedName,
+            Map<String, Integer> colIndexMap) {
+        List<RelReferentialConstraint> result = new ArrayList<>();
+        try (Connection connection = dataSource.getConnection()) {
+            DatabaseMetaData meta = connection.getMetaData();
+            try (ResultSet rs = meta.getImportedKeys(null, schema, tableName)) {
+                // Group by FK_NAME: each FK may span multiple columns
+                java.util.Map<String, List<String[]>> fkGroups = new java.util.LinkedHashMap<>();
+                while (rs.next()) {
+                    String fkName = rs.getString("FK_NAME");
+                    if (fkName == null) fkName = "fk_" + rs.getString("FKCOLUMN_NAME");
+                    String fkCol = rs.getString("FKCOLUMN_NAME").toLowerCase();
+                    String pkSchema = rs.getString("PKTABLE_SCHEM");
+                    String pkTable = rs.getString("PKTABLE_NAME").toLowerCase();
+                    String pkCol = rs.getString("PKCOLUMN_NAME").toLowerCase();
+                    fkGroups.computeIfAbsent(fkName, k -> new ArrayList<>())
+                            .add(new String[]{fkCol, pkSchema, pkTable, pkCol});
+                }
+                for (List<String[]> cols : fkGroups.values()) {
+                    // All rows in a group share the same target table
+                    String pkSchema = cols.get(0)[1];
+                    String pkTable = cols.get(0)[2];
+                    List<String> targetQualifiedName = new ArrayList<>();
+                    if (pkSchema != null) targetQualifiedName.add(pkSchema.toLowerCase());
+                    targetQualifiedName.add(pkTable);
+
+                    // Build column pairs: need target table's column index map
+                    // We read the target table's columns to resolve indices
+                    Map<String, Integer> targetColIndexMap = readColumnIndexMap(schema, pkTable);
+                    if (targetColIndexMap == null) continue;
+
+                    List<IntPair> columnPairs = new ArrayList<>();
+                    boolean valid = true;
+                    for (String[] row : cols) {
+                        Integer srcIdx = colIndexMap.get(row[0]);
+                        Integer tgtIdx = targetColIndexMap.get(row[3]);
+                        if (srcIdx == null || tgtIdx == null) { valid = false; break; }
+                        columnPairs.add(IntPair.of(srcIdx, tgtIdx));
+                    }
+                    if (valid && !columnPairs.isEmpty()) {
+                        result.add(RelReferentialConstraintImpl.of(
+                                sourceQualifiedName, targetQualifiedName, columnPairs));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("readForeignKeys: failed for {}.{}: {}", schema, tableName, e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Read column name -> index mapping for a table (used for FK target resolution).
+     */
+    private Map<String, Integer> readColumnIndexMap(String schema, String tableName) {
+        try (Connection connection = dataSource.getConnection()) {
+            DatabaseMetaData meta = connection.getMetaData();
+            try (ResultSet rs = meta.getColumns(null, schema, tableName, null)) {
+                Map<String, Integer> map = new java.util.HashMap<>();
+                int idx = 0;
+                while (rs.next()) {
+                    map.put(rs.getString(COLUMN_NAME).toLowerCase(), idx++);
+                }
+                return map.isEmpty() ? null : map;
+            }
+        } catch (Exception e) {
+            log.warn("readColumnIndexMap: failed for {}.{}: {}", schema, tableName, e.getMessage());
+            return null;
+        }
     }
 
     RelProtoDataType getRelDataType(String catalogName, String schemaName, String tableName) throws SQLException {

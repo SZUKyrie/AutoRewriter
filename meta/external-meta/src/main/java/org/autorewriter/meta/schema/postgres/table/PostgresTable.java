@@ -1,5 +1,6 @@
 package org.autorewriter.meta.schema.postgres.table;
 
+import org.apache.calcite.rel.RelReferentialConstraint;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.schema.Statistic;
@@ -31,21 +32,32 @@ public class PostgresTable extends AbstractTable {
      */
     private final List<ImmutableBitSet> uniqueKeys;
 
-    /** Backward-compatible constructor: no unique key info. */
+    /** Foreign key constraints from this table to other tables. */
+    private final List<RelReferentialConstraint> referentialConstraints;
+
+    /** Backward-compatible constructor: no unique key or FK info. */
     public PostgresTable(List<String> qualifiedName, List<Column> columnList) {
-        this(qualifiedName, columnList, Collections.emptyList());
+        this(qualifiedName, columnList, Collections.emptyList(), Collections.emptyList());
+    }
+
+    /** Constructor with unique keys but no FK info. */
+    public PostgresTable(List<String> qualifiedName, List<Column> columnList,
+                         List<ImmutableBitSet> uniqueKeys) {
+        this(qualifiedName, columnList, uniqueKeys, Collections.emptyList());
     }
 
     public PostgresTable(List<String> qualifiedName, List<Column> columnList,
-                         List<ImmutableBitSet> uniqueKeys) {
+                         List<ImmutableBitSet> uniqueKeys,
+                         List<RelReferentialConstraint> referentialConstraints) {
         this.qualifiedName = qualifiedName;
         this.columnList = columnList;
         this.uniqueKeys = uniqueKeys;
+        this.referentialConstraints = referentialConstraints;
     }
 
     @Override
     public Statistic getStatistic() {
-        return Statistics.of(null, uniqueKeys, null, null);
+        return Statistics.of(null, uniqueKeys, referentialConstraints, null);
     }
 
     @Override

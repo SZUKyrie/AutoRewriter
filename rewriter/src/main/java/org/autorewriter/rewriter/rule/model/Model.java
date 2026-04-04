@@ -1,6 +1,11 @@
 package org.autorewriter.rewriter.rule.model;
 
+import org.apache.calcite.plan.RelOptTable;
+import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.RelReferentialConstraint;
+import org.apache.calcite.rel.logical.LogicalAggregate;
+import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rel.logical.LogicalTableScan;
 import org.apache.calcite.rel.metadata.DefaultRelMetadataProvider;
 import org.apache.calcite.rel.metadata.JaninoRelMetadataProvider;
@@ -8,6 +13,7 @@ import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.util.ImmutableBitSet;
+import org.apache.calcite.util.mapping.IntPair;
 import org.autorewriter.rewriter.rule.constraint.Constraint;
 import org.autorewriter.rewriter.rule.constraint.Constraints;
 import org.autorewriter.rewriter.rule.symbol.Symbol;
@@ -15,6 +21,7 @@ import org.autorewriter.rewriter.rule.symbol.SymbolKind;
 import org.autorewriter.rewriter.rule.util.ColumnRef;
 import org.autorewriter.rewriter.rule.util.ColumnRefResolver;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -325,21 +332,158 @@ public class Model {
     }
 
     /**
-     * REFERENCE(t0, a0, t1, a1): foreign key from t0.a0 to t1.a1.
+     * REFERENCE(t0, a0, t1, a1): foreign key from t0.a0 referencing t1.a1.
+     *
+     * <p>Aligned with WeTune's {@code Model.checkReference()} (lines 216-256):
+     * <ol>
+     *   <li>Resolve a0/a1 to column refs; if a0 == a1 (reflexive), skip FK lookup
+     *       but still run the path-filter check</li>
+     *   <li>Otherwise look up FK constraints from the referring table's schema metadata</li>
+     *   <li>Check that no Filter/Having exists on the path from the referred
+     *       column's origin table up to the t1 subtree root (filters invalidate FK guarantees)</li>
+     * </ol>
      */
     @SuppressWarnings("unchecked")
     private boolean checkReference(Constraint c) {
-        Symbol t0Sym = c.symbols()[0];
-        Symbol a0Sym = c.symbols()[1];
-        Symbol t1Sym = c.symbols()[2];
-        Symbol a1Sym = c.symbols()[3];
+        Symbol t0Sym = c.symbols()[0]; // referring table
+        Symbol a0Sym = c.symbols()[1]; // referring attrs
+        Symbol t1Sym = c.symbols()[2]; // referred table
+        Symbol a1Sym = c.symbols()[3]; // referred attrs
 
         List<ColumnRef> a0 = ofAttrs(a0Sym);
+        if (a0 == null) return true; // not assigned yet
         List<ColumnRef> a1 = ofAttrs(a1Sym);
-        if (a0 == null || a1 == null) return true;
+        if (a1 == null) return true; // not assigned yet
 
-        // Check that both attr sets refer to equivalent columns
-        return a0.equals(a1);
+        // Step 1: FK lookup — skip only when a0 == a1 (reflexive, same columns)
+        // Aligned with WeTune lines 235-236:
+        //   if (!referringColumns.equals(referredCols)
+        //       && linearFind(fks, ...) == null) return false;
+        if (!a0.equals(a1)) {
+            // Find the referring table's LogicalTableScan to access FK metadata
+            RelNode t0Node = ofTable(t0Sym);
+            if (t0Node == null) return true; // not assigned yet
+            LogicalTableScan t0Scan = findTableScan(t0Node);
+            if (t0Scan == null) return false; // can't resolve table
+
+            RelOptTable t0Table = t0Scan.getTable();
+            List<RelReferentialConstraint> fks = t0Table.getReferentialConstraints();
+            if (fks == null || fks.isEmpty()) return false;
+
+            // Resolve referring column names from a0
+            List<String> referringColNames = new ArrayList<>(a0.size());
+            for (ColumnRef ref : a0) referringColNames.add(ref.getColumnName().toLowerCase());
+
+            // Resolve referred column names from a1
+            List<String> referredColNames = new ArrayList<>(a1.size());
+            for (ColumnRef ref : a1) referredColNames.add(ref.getColumnName().toLowerCase());
+
+            // Resolve referred table name from a1 (all ColumnRefs in a1 should share the same table)
+            String referredTableName = a1.get(0).getTableName().toLowerCase();
+
+            // Check if any FK matches
+            List<String> t0ColNames = t0Table.getRowType().getFieldNames();
+            boolean fkFound = false;
+            for (RelReferentialConstraint fk : fks) {
+                // Check target table matches
+                List<String> targetQName = fk.getTargetQualifiedName();
+                String fkTargetTable = targetQName.get(targetQName.size() - 1).toLowerCase();
+                if (!referredTableName.contains(fkTargetTable) && !fkTargetTable.contains(referredTableName)) {
+                    // Try matching just the table name part
+                    String referredSimpleName = referredTableName;
+                    int dotIdx = referredSimpleName.lastIndexOf('.');
+                    if (dotIdx >= 0) referredSimpleName = referredSimpleName.substring(dotIdx + 1);
+                    if (!fkTargetTable.equals(referredSimpleName)) continue;
+                }
+
+                // Check column pairs match
+                List<IntPair> pairs = fk.getColumnPairs();
+                if (pairs.size() != referringColNames.size()) continue;
+
+                // Resolve FK source column names and check they match a0
+                boolean colsMatch = true;
+                List<String> fkReferredColNames = new ArrayList<>(pairs.size());
+                for (IntPair pair : pairs) {
+                    String srcCol = t0ColNames.get(pair.source).toLowerCase();
+                    if (!referringColNames.contains(srcCol)) { colsMatch = false; break; }
+                    fkReferredColNames.add(String.valueOf(pair.target));
+                }
+                if (!colsMatch) continue;
+
+                // Resolve target column names: find the referred table's LogicalTableScan
+                RelNode t1Node = ofTable(t1Sym);
+                if (t1Node == null) return true;
+                LogicalTableScan t1Scan = findTableScan(t1Node);
+                if (t1Scan != null) {
+                    List<String> t1ColNames = t1Scan.getTable().getRowType().getFieldNames();
+                    boolean targetColsMatch = true;
+                    for (int i = 0; i < pairs.size(); i++) {
+                        int targetIdx = pairs.get(i).target;
+                        if (targetIdx >= t1ColNames.size()) { targetColsMatch = false; break; }
+                        String targetCol = t1ColNames.get(targetIdx).toLowerCase();
+                        if (!referredColNames.contains(targetCol)) { targetColsMatch = false; break; }
+                    }
+                    if (!targetColsMatch) continue;
+                }
+
+                fkFound = true;
+                break;
+            }
+            if (!fkFound) return false;
+        }
+
+        // Step 2: Path filter check (WeTune lines 241-253)
+        // Always executed, even when a0 == a1 (reflexive).
+        // If the referred side (t1) has filters between the origin table and the
+        // surface node, the FK guarantee is invalidated.
+        RelNode t1Node = ofTable(t1Sym);
+        if (t1Node == null) return true;
+        if (hasFilterOnPath(t1Node)) return false;
+
+        return true;
+    }
+
+    /**
+     * Find the first LogicalTableScan in a RelNode subtree (depth-first).
+     */
+    private static LogicalTableScan findTableScan(RelNode node) {
+        node = unwrap(node);
+        if (node instanceof LogicalTableScan) return (LogicalTableScan) node;
+        for (RelNode input : node.getInputs()) {
+            LogicalTableScan scan = findTableScan(input);
+            if (scan != null) return scan;
+        }
+        return null;
+    }
+
+    /**
+     * Check if there is a Filter or Aggregate-with-Having on the path from root
+     * down to any LogicalTableScan. Aligned with WeTune's path filter check
+     * (Model.java lines 241-253) which invalidates FK when the referred side is filtered.
+     */
+    private static boolean hasFilterOnPath(RelNode node) {
+        node = unwrap(node);
+        if (node instanceof LogicalTableScan) return false; // reached leaf, no filter
+        if (node instanceof LogicalFilter) return true;
+        if (node instanceof LogicalAggregate) {
+            // Check if aggregate has a having clause (non-empty agg calls can filter)
+            // In Calcite, having is represented as a Filter on top of Aggregate,
+            // so we just check for Filter nodes in the tree
+        }
+        for (RelNode input : node.getInputs()) {
+            if (hasFilterOnPath(input)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Unwrap HepRelVertex to get the underlying RelNode.
+     */
+    private static RelNode unwrap(RelNode node) {
+        while (node instanceof HepRelVertex) {
+            node = ((HepRelVertex) node).getCurrentRel();
+        }
+        return node;
     }
 
     private int resolveColumnIndex(ColumnRef ref, RelNode node) {
