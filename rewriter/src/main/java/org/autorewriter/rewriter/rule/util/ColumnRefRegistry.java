@@ -177,23 +177,51 @@ public class ColumnRefRegistry {
     }
 
     /**
-     * Fallback resolution by column name. Only matches non-expression columns
-     * whose table name is NOT disambiguated (no positional tag).
-     * Disambiguated refs (from duplicate table instances in joins) must resolve
-     * via exact identity match — falling back to name-only would defeat the
-     * purpose of disambiguation.
+     * Fallback resolution by column name and base table name.
+     *
+     * <p>Handles two cases:
+     * <ol>
+     *   <li><b>Non-disambiguated ref</b> (no {@code $} in table name): matches any
+     *       target column with the same column name whose table name is also
+     *       non-disambiguated and not an expression placeholder.</li>
+     *   <li><b>Disambiguated ref</b> (e.g., {@code contacts$41.user_id}): the
+     *       {@code $N} suffix was added by {@link #computeJoin} to give unique
+     *       identity within a join. After a rewrite eliminates the join, the
+     *       target plan may have a clean {@code contacts.user_id}. In this case
+     *       we strip the {@code $N} suffix to recover the base table name and
+     *       match against non-disambiguated target columns.</li>
+     * </ol>
+     *
+     * <p>Target-side disambiguated columns (those still carrying a {@code $}
+     * suffix) are never matched by this fallback — they retain their unique
+     * identity and must be resolved via exact {@link ColumnRef#equals} match.
      */
     private static int findByColumnName(ColumnRef ref, List<ColumnRef> cols) {
-        // Never fall back to name-only for disambiguated refs
-        if (ref.getTableName().contains("$")) return -1;
+        String refTable = ref.getTableName();
+        String baseTable = stripDisambiguationSuffix(refTable);
+
         for (int i = 0; i < cols.size(); i++) {
-            if (cols.get(i).getColumnName().equalsIgnoreCase(ref.getColumnName())
-                    && !cols.get(i).getTableName().startsWith("$")
-                    && !cols.get(i).getTableName().contains("$")) {
+            ColumnRef candidate = cols.get(i);
+            // Skip expression placeholders and disambiguated target columns
+            String candidateTable = candidate.getTableName();
+            if (candidateTable.startsWith("$") || candidateTable.contains("$")) {
+                continue;
+            }
+            if (candidate.getColumnName().equalsIgnoreCase(ref.getColumnName())
+                    && candidateTable.equals(baseTable)) {
                 return i;
             }
         }
         return -1;
+    }
+
+    /**
+     * Strip the {@code $N} disambiguation suffix from a table name.
+     * E.g., {@code "contacts$41"} → {@code "contacts"}, {@code "contacts"} → {@code "contacts"}.
+     */
+    private static String stripDisambiguationSuffix(String tableName) {
+        int dollarIdx = tableName.indexOf('$');
+        return dollarIdx >= 0 ? tableName.substring(0, dollarIdx) : tableName;
     }
 
     private static RelNode unwrap(RelNode node) {

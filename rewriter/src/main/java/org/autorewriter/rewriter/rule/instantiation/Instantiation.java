@@ -55,6 +55,8 @@ public class Instantiation {
         if (result == null) {
             return null;
         }
+
+        result = new NormalizeJoin().normalize(result);
         result = rebuildFreshTree(result, targetCluster);
         return result;
     }

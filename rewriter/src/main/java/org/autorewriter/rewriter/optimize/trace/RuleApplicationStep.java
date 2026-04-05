@@ -45,7 +45,7 @@ public class RuleApplicationStep {
         return String.format("[Step %d] [%s] %s | %s => %s",
                 stepIndex,
                 ruleType,
-                rule.getClass().getSimpleName(),
+                rule.toString(),
                 matchedRelNode.getRelTypeName(),
                 producedRelNode.getRelTypeName());
     }
