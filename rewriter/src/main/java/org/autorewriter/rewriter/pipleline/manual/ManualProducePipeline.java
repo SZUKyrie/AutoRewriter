@@ -46,6 +46,7 @@ public class ManualProducePipeline extends ProducePipeline {
         long ruleRegStart = System.currentTimeMillis();
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
 
+        int validRuleCount = 0;
         for (int i = 0; i < ruleContexts.size(); i++) {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);
 
@@ -68,6 +69,7 @@ public class ManualProducePipeline extends ProducePipeline {
                     i
             );
             optimizer.addRule(rule);
+            validRuleCount ++;
 
             // Register stripped DISTINCT variant (aligned with CostBaseProducePipeline)
             if (DistinctAggregateStripper.isDistinctAggregate(sourceTemplate)) {
@@ -88,8 +90,8 @@ public class ManualProducePipeline extends ProducePipeline {
             }
         }
         produceResult.setRuleRegistrationTimeMs(System.currentTimeMillis() - ruleRegStart);
-        log.info("rule registration finished, {} rules registered in {} ms",
-                context.getRuleAnalysisContexts().size(), produceResult.getRuleRegistrationTimeMs());
+        log.info("rule registration finished, {} rules, {} valid rules registered in {} ms",
+                context.getRuleAnalysisContexts().size(), validRuleCount, produceResult.getRuleRegistrationTimeMs());
 
         for(HistoricalSqlRecord historicalSqlRecord : context.getQueryId2HistoricalSqlRecord().values()) {
             OptimizeResult optimizeResult = new OptimizeResult(historicalSqlRecord.getSql(), historicalSqlRecord.getQueryId());

@@ -348,7 +348,6 @@ public class Instantiation {
      * @return the result with virtualExprs applied, or {@code null} if any condition
      *         references a foreign column that cannot be resolved in the target
      */
-    @SuppressWarnings("unchecked")
     private RelNode applyVirtualExprs(RexNode templateCondition, RelNode result) {
         // 1. Extract target predicate symbol from template condition
         String targetPredName = extractPredSymbol(templateCondition);

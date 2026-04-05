@@ -10,6 +10,7 @@ import org.autorewriter.rewriter.pipleline.ProduceContext;
 import org.autorewriter.rewriter.pipleline.ProducePipeline;
 import org.autorewriter.rewriter.pipleline.costbase.CostBaseProducePipeline;
 import org.autorewriter.rewriter.pipleline.manual.ManualProducePipeline;
+import org.autorewriter.rewriter.pipleline.result.ProduceResult;
 import org.autorewriter.sql.analyze.PostgresqlSchemaTestBase;
 import org.junit.BeforeClass;
 
@@ -86,6 +87,60 @@ public class AutoRwFakeE2ETesBase extends PostgresqlSchemaTestBase {
         ProducePipeline pipeline = createPipeline(pipelineType);
 
         executePipelineWithContext(pipeline, context);
+    }
+
+    /**
+     * Execute pipeline with explicit rule strings (instead of reading from files).
+     *
+     * @param pipelineType CBO or MANUAL
+     * @param ddlDirname   schema directory name under E2E_TEST_DIR (e.g. "diaspora")
+     * @param rules        list of rule template strings
+     * @return ProduceResult containing OptimizeResult for each query
+     */
+    protected ProduceResult executePipeline(PipelineType pipelineType, String ddlDirname, List<String> rules) {
+        String customDdlFilePath = E2E_TEST_TABLE_DDL + ddlDirname + "/" + CUSTOM_TABLE_DDL;
+        Path path = Paths.get(customDdlFilePath);
+        if (Files.exists(path)) {
+            createAllTable(customDdlFilePath);
+        }
+
+        // Parse rule strings into RuleAnalysisContexts
+        List<RuleAnalysisContext> ruleContexts = new ArrayList<>();
+        for (String rule : rules) {
+            try {
+                RuleAnalysisContext ctx = RuleAnalyzer.analyze(rule);
+                if (ctx != null && ctx.getSourceRelNode() != null && ctx.getTargetRelNode() != null) {
+                    ruleContexts.add(ctx);
+                } else {
+                    log.warn("Failed to parse rule (null result): {}", rule.substring(0, Math.min(80, rule.length())));
+                }
+            } catch (Exception e) {
+                log.warn("Failed to parse rule: {}", rule.substring(0, Math.min(80, rule.length())), e);
+            }
+        }
+
+        // Read queries from ddlDirname/query
+        String queryDir = ddlDirname + "/query";
+        Path scenarioDir = resolveScenarioDir(queryDir);
+        List<String> sqlStatements = readSqlStatements(scenarioDir);
+
+        Map<String, HistoricalSqlRecord> queryId2HistoricalSqlRecord = new LinkedHashMap<>();
+        for (int i = 0; i < sqlStatements.size(); i++) {
+            String queryId = String.valueOf(i);
+            HistoricalSqlRecord record = new HistoricalSqlRecord();
+            record.setQueryId(queryId);
+            record.setSql(sqlStatements.get(i));
+            queryId2HistoricalSqlRecord.put(queryId, record);
+        }
+
+        ProduceContext context = new ProduceContext(
+                queryId2HistoricalSqlRecord, ruleContexts, ComputeEngine.POSTGRESQL);
+
+        log.info("Context created with {} queries and {} rules (from strings)",
+                queryId2HistoricalSqlRecord.size(), ruleContexts.size());
+
+        ProducePipeline pipeline = createPipeline(pipelineType);
+        return pipeline.run(context);
     }
 
     private ProduceContext createContext(String ddlDirname, String ruleDirname) {

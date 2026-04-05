@@ -15,6 +15,7 @@ import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.SubQueryTreeResolver;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterMerger;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
+import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.RedundantProjectRemover;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.optimize.trace.RuleTraceListener;
 import org.autorewriter.rewriter.rule.AutoRewriteRule;
@@ -153,6 +154,7 @@ public class RuleBaseOptimizer implements BaseOptimizer {
         result = SubQueryTreeResolver.resolve(result);
 
         // Save the plan before FilterMerger for debugging/comparison with WeTune
+        result = RedundantProjectRemover.remove(result);
         if (trace != null) {
             trace.setRawOptimizedPlan(result);
         }

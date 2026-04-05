@@ -36,6 +36,7 @@ import org.autorewriter.rewriter.optimize.costBaseOpt.insub.SubQueryTreeResolver
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterMerger;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.PostgresTableScanRule;
+import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.RedundantProjectRemover;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.optimize.trace.RuleTraceListener;
 
@@ -158,14 +159,10 @@ public class CostBaseOptimizer implements BaseOptimizer {
 
         RelNode bestPlan = planner.findBestExp();
 
-        // Post-process: resolve RelSubset and LogicalInSubFilter references
-        // inside RexSubQuery.rel trees. findBestExp() only resolves the main
-        // plan tree via getInputs(); RexSubQuery.rel inside filter conditions
-        // may still contain RelSubset wrappers and LogicalInSubFilter nodes
-        // that RelToSqlConverter cannot handle.
         //bestPlan = SubQueryTreeResolver.resolve(bestPlan);
 
         bestPlan = FilterMerger.merge(bestPlan);
+        bestPlan = RedundantProjectRemover.remove(bestPlan);
 
         log.info("CBO optimization completed, {} user rules + JDBC conversion rules registered",
                 rules.size());
