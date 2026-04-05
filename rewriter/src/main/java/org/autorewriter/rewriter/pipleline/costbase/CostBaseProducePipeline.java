@@ -68,6 +68,9 @@ public class CostBaseProducePipeline extends ProducePipeline {
             if (DistinctAggregateStripper.isDistinctAggregate(sourceTemplate)) {
                 RuleAnalysisContext strippedContext =
                         DistinctAggregateStripper.stripBoth(expandedContext);
+                if (strippedContext.isNoOp()) {
+                    continue;
+                }
                 Class<? extends RelNode> strippedRootClass =
                         (Class<? extends RelNode>) strippedContext.getSourceRelNode().getClass();
                 AutoRewriteRule strippedRule = new AutoRewriteRule(

@@ -42,26 +42,19 @@ public class ManualProducePipeline extends ProducePipeline {
 
         // create rbo optimizer and register rules
         RuleBaseOptimizer optimizer = new RuleBaseOptimizer();
-        //optimizer.addRule(JoinCommuteRule.Config.DEFAULT.toRule());
-        //optimizer.addRule(SubQueryRemoveRule.Config.FILTER.toRule());
-        //optimizer.addRule(SubQueryRemoveRule.Config.PROJECT.toRule());
-        //optimizer.addRule(SubQueryRemoveRule.Config.JOIN.toRule());
-        //optimizer.addRule(ProjectMergeRule.Config.DEFAULT.toRule());
+
         long ruleRegStart = System.currentTimeMillis();
         List<RuleAnalysisContext> ruleContexts = context.getRuleAnalysisContexts();
-
-        // optional: simplify rule templates before registration
-//        RuleTemplateSimplifier simplifier = new RuleTemplateSimplifier();
-//        ruleContexts = simplifier.simplify(ruleContexts);
 
         for (int i = 0; i < ruleContexts.size(); i++) {
             RuleAnalysisContext ruleContext = ruleContexts.get(i);
 
-            // Preprocess source template: aligned with CostBaseProducePipeline
-            //System.out.println("[Template " + i + " BEFORE expand]\n" + ruleContext.getSourceRelNode().explain());
+            if (ruleContext.isNoOp()) {
+                continue;
+            }
+
             RelNode sourceTemplate = InSubFilterExpander.expand(ruleContext.getSourceRelNode());
             RelNode targetTemplate = InSubFilterExpander.expand(ruleContext.getTargetRelNode());
-            //System.out.println("[Template " + i + " AFTER expand]\n" + sourceTemplate.explain());
             RuleAnalysisContext expandedContext = new RuleAnalysisContext(
                     sourceTemplate, targetTemplate,
                     ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());
@@ -80,6 +73,9 @@ public class ManualProducePipeline extends ProducePipeline {
             if (DistinctAggregateStripper.isDistinctAggregate(sourceTemplate)) {
                 RuleAnalysisContext strippedContext =
                         DistinctAggregateStripper.stripBoth(expandedContext);
+                if (strippedContext.isNoOp()) {
+                    continue;
+                }
                 Class<? extends RelNode> strippedRootClass =
                         (Class<? extends RelNode>) strippedContext.getSourceRelNode().getClass();
                 AutoRewriteRule strippedRule = new AutoRewriteRule(
