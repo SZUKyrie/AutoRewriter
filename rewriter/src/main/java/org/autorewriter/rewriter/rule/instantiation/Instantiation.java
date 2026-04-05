@@ -416,6 +416,9 @@ public class Instantiation {
 
         // Rebuild join condition using interpretAttrs + registry
         RexNode condition = rebuildJoinCondition(template, left, right);
+        if(condition == null) {
+            return null;
+        }
 
         return LogicalJoin.create(left, right, Collections.emptyList(), condition,
                 Collections.emptySet(), template.getJoinType());
@@ -464,21 +467,18 @@ public class Instantiation {
 
     private RexNode rebuildJoinCondition(LogicalJoin template, RelNode left, RelNode right) {
         RexNode templateCond = template.getCondition();
-        int tLeftFieldCount = template.getLeft().getRowType().getFieldCount();
-
-        // Extract join key pairs using FIELD NAMES (not index ranges).
-        // Template tables have 10 columns each (a0-a9), so both key indices
-        // may fall within the left table's range. We use field names from
-        // the template's combined row type to identify the symbols.
-        // Use left/right child field names directly (not disambiguated combined row type)
-        List<String> tLeftFields = template.getLeft().getRowType().getFieldNames();
-        List<String> tRightFields = template.getRight().getRowType().getFieldNames();
         List<RexInputRef[]> refPairs = extractRefPairs(templateCond);
 
         if (refPairs.isEmpty()) {
             RexNode inst = instantiateRexNode(templateCond, null);
             return inst != null ? inst : templateCond;
         }
+
+        // Use the join's combined row type to get symbol names for each index.
+        // This is correct regardless of whether an index falls on the left or
+        // right child — the combined row type is the authoritative mapping from
+        // positional index to symbol name in the template.
+        List<String> combinedFields = template.getRowType().getFieldNames();
 
         RexBuilder rexBuilder = left.getCluster().getRexBuilder();
         List<RexNode> equalities = new ArrayList<>();
@@ -487,54 +487,44 @@ public class Instantiation {
             int idx0 = pair[0].getIndex();
             int idx1 = pair[1].getIndex();
 
-            // Resolve field names from the correct child
-            String leftName = null, rightName = null;
-            if (idx0 < tLeftFieldCount && idx1 >= tLeftFieldCount) {
-                // idx0 from left, idx1 from right
-                leftName = idx0 < tLeftFields.size() ? tLeftFields.get(idx0) : null;
-                rightName = (idx1 - tLeftFieldCount) < tRightFields.size()
-                        ? tRightFields.get(idx1 - tLeftFieldCount) : null;
-            } else if (idx1 < tLeftFieldCount && idx0 >= tLeftFieldCount) {
-                // idx1 from left, idx0 from right
-                leftName = idx1 < tLeftFields.size() ? tLeftFields.get(idx1) : null;
-                rightName = (idx0 - tLeftFieldCount) < tRightFields.size()
-                        ? tRightFields.get(idx0 - tLeftFieldCount) : null;
-            } else if (idx0 < tLeftFieldCount && idx1 < tLeftFieldCount) {
-                // Both on left side — use left child's field names
-                leftName = idx0 < tLeftFields.size() ? tLeftFields.get(idx0) : null;
-                rightName = idx1 < tLeftFields.size() ? tLeftFields.get(idx1) : null;
-            } else {
-                // Both on right side — use right child's field names
-                int rIdx0 = idx0 - tLeftFieldCount;
-                int rIdx1 = idx1 - tLeftFieldCount;
-                leftName = rIdx0 < tRightFields.size() ? tRightFields.get(rIdx0) : null;
-                rightName = rIdx1 < tRightFields.size() ? tRightFields.get(rIdx1) : null;
+            String name0 = idx0 < combinedFields.size() ? combinedFields.get(idx0) : null;
+            String name1 = idx1 < combinedFields.size() ? combinedFields.get(idx1) : null;
+
+            // Resolve each symbol to ColumnRefs via interpretAttrs
+            List<ColumnRef> refs0 = resolveJoinKeyRefs(name0);
+            List<ColumnRef> refs1 = resolveJoinKeyRefs(name1);
+
+            if (refs0 == null || refs0.isEmpty() || refs1 == null || refs1.isEmpty()) {
+                continue;
             }
+
+            // Try to resolve each ref on both sides; the one that resolves
+            // on left becomes the left key, the other becomes the right key.
+            int leftIdx0 = registry.resolveIndex(refs0.get(0), left);
+            int rightIdx0 = registry.resolveIndex(refs0.get(0), right);
+            int leftIdx1 = registry.resolveIndex(refs1.get(0), left);
+            int rightIdx1 = registry.resolveIndex(refs1.get(0), right);
 
             int newLeftIdx = -1;
             int newRightIdx = -1;
 
-            if (leftName != null && SymbolKind.isSymbolName(leftName)) {
-                List<ColumnRef> refs = interpretAttrs(Symbol.of(leftName));
-                if (refs == null) {
-                    Symbol sym = Symbol.of(leftName);
-                    Symbol src = constraints.instantiationOf(sym);
-                    refs = model.ofAttrs(src != null ? src : sym);
-                }
-                if (refs != null && !refs.isEmpty()) {
-                    newLeftIdx = registry.resolveIndex(refs.get(0), left);
-                }
-            }
-            if (rightName != null && SymbolKind.isSymbolName(rightName)) {
-                List<ColumnRef> refs = interpretAttrs(Symbol.of(rightName));
-                if (refs == null) {
-                    Symbol sym = Symbol.of(rightName);
-                    Symbol src = constraints.instantiationOf(sym);
-                    refs = model.ofAttrs(src != null ? src : sym);
-                }
-                if (refs != null && !refs.isEmpty()) {
-                    newRightIdx = registry.resolveIndex(refs.get(0), right);
-                }
+            if (leftIdx0 >= 0 && rightIdx1 >= 0) {
+                // name0 resolves on left, name1 resolves on right
+                newLeftIdx = leftIdx0;
+                newRightIdx = rightIdx1;
+            } else if (leftIdx1 >= 0 && rightIdx0 >= 0) {
+                // name1 resolves on left, name0 resolves on right
+                newLeftIdx = leftIdx1;
+                newRightIdx = rightIdx0;
+            } else if (leftIdx0 >= 0 && leftIdx1 >= 0) {
+                // Both resolve on left (self-join scenario) — use combined row type
+                // position to determine original left/right assignment
+                newLeftIdx = leftIdx0;
+                newRightIdx = leftIdx1;
+            } else if (rightIdx0 >= 0 && rightIdx1 >= 0) {
+                // Both resolve on right
+                newLeftIdx = rightIdx0;
+                newRightIdx = rightIdx1;
             }
 
             if (newLeftIdx >= 0 && newRightIdx >= 0) {
@@ -547,9 +537,31 @@ public class Instantiation {
             }
         }
 
-        if (equalities.isEmpty()) return rexBuilder.makeLiteral(true);
+        if (equalities.isEmpty() && refPairs.isEmpty()) {
+            return rexBuilder.makeLiteral(true);
+        } else if (equalities.isEmpty()) {
+            return null;
+        }
+
         if (equalities.size() == 1) return equalities.get(0);
         return rexBuilder.makeCall(SqlStdOperatorTable.AND, equalities);
+    }
+
+    /**
+     * Resolve a symbol name to ColumnRefs for join key rebuilding.
+     * Tries interpretAttrs first, falls back to direct model lookup.
+     */
+    private List<ColumnRef> resolveJoinKeyRefs(String symbolName) {
+        if (symbolName == null || !SymbolKind.isSymbolName(symbolName)) {
+            return null;
+        }
+        List<ColumnRef> refs = interpretAttrs(Symbol.of(symbolName));
+        if (refs == null) {
+            Symbol sym = Symbol.of(symbolName);
+            Symbol src = constraints.instantiationOf(sym);
+            refs = model.ofAttrs(src != null ? src : sym);
+        }
+        return refs;
     }
 
     /**

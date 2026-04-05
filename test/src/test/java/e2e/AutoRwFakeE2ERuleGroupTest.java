@@ -1,13 +1,7 @@
 package e2e;
 
-import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.rel2sql.RelToSqlConverter;
-import org.apache.calcite.sql.SqlDialect;
-import org.apache.calcite.sql.SqlNode;
-import org.apache.calcite.sql.dialect.AnsiSqlDialect;
 import org.autorewriter.e2e.RewritePathE2ETest;
 import org.autorewriter.rewriter.optimize.OptimizeResult;
-import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterSqlConverter;
 import org.autorewriter.rewriter.pipleline.result.ProduceResult;
 import org.junit.Test;
 
@@ -29,26 +23,26 @@ public class AutoRwFakeE2ERuleGroupTest extends RewritePathE2ETest {
         OptimizeResult opt = result.getOptimizeResults().get(0);
         assertNotNull("Optimized RelNode should not be null", opt.getOptimizedRelNode());
         assertEquals("LogicalSort(offset=[0], fetch=[15])\n" +
-                "  LogicalInSubFilter(lhsRef=[$0])\n" +
-                "    LogicalTableScan(table=[[people]])\n" +
-                "    LogicalProject(id=[$0])\n" +
-                "      LogicalFilter(condition=[=($11, 488)])\n" +
-                "        LogicalJoin(condition=[=($0, $22)], joinType=[inner])\n" +
-                "          LogicalJoin(condition=[=($12, $19)], joinType=[inner])\n" +
-                "            LogicalJoin(condition=[true], joinType=[inner])\n" +
-                "              LogicalTableScan(table=[[people]])\n" +
-                "              LogicalTableScan(table=[[contacts]])\n" +
-                "            LogicalTableScan(table=[[aspect_memberships]])\n" +
-                "          LogicalFilter(condition=[AND(OR(=($20, true), =($41, 488)), OR(LIKE($25, _UTF-8'%my% aspect% contact%'), LIKE($2, _UTF-8'myaspectcontact%')), =($7, false), =($41, 488), =($36, 321))])\n" +
-                "            LogicalJoin(condition=[AND(=($41, 488), =($42, $0))], joinType=[left])\n" +
-                "              LogicalJoin(condition=[true], joinType=[inner])\n" +
-                "                LogicalJoin(condition=[true], joinType=[inner])\n" +
-                "                  LogicalJoin(condition=[=($21, $0)], joinType=[inner])\n" +
-                "                    LogicalTableScan(table=[[people]])\n" +
-                "                    LogicalTableScan(table=[[profiles]])\n" +
-                "                  LogicalTableScan(table=[[contacts]])\n" +
-                "                LogicalTableScan(table=[[aspect_memberships]])\n" +
-                "              LogicalTableScan(table=[[contacts]])\n",
+                        "  LogicalInSubFilter(lhsRef=[$0])\n" +
+                        "    LogicalTableScan(table=[[people]])\n" +
+                        "    LogicalProject(id=[$0])\n" +
+                        "      LogicalFilter(condition=[=($11, 488)])\n" +
+                        "        LogicalJoin(condition=[=($0, $22)], joinType=[inner])\n" +
+                        "          LogicalJoin(condition=[=($12, $19)], joinType=[inner])\n" +
+                        "            LogicalJoin(condition=[=($12, $0)], joinType=[inner])\n" +
+                        "              LogicalTableScan(table=[[people]])\n" +
+                        "              LogicalTableScan(table=[[contacts]])\n" +
+                        "            LogicalTableScan(table=[[aspect_memberships]])\n" +
+                        "          LogicalFilter(condition=[AND(OR(=($20, true), =($41, 488)), OR(LIKE($25, _UTF-8'%my% aspect% contact%'), LIKE($2, _UTF-8'myaspectcontact%')), =($7, false), =($41, 488), =($36, 321))])\n" +
+                        "            LogicalJoin(condition=[AND(=($41, 488), =($42, $0))], joinType=[left])\n" +
+                        "              LogicalJoin(condition=[=($30, $37)], joinType=[inner])\n" +
+                        "                LogicalJoin(condition=[=($0, $30)], joinType=[inner])\n" +
+                        "                  LogicalJoin(condition=[=($21, $0)], joinType=[inner])\n" +
+                        "                    LogicalTableScan(table=[[people]])\n" +
+                        "                    LogicalTableScan(table=[[profiles]])\n" +
+                        "                  LogicalTableScan(table=[[contacts]])\n" +
+                        "                LogicalTableScan(table=[[aspect_memberships]])\n" +
+                        "              LogicalTableScan(table=[[contacts]])\n",
                 opt.getOptimizedRelNode().explain());
     }
 }

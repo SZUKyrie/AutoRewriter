@@ -123,14 +123,6 @@ public class RuleBaseOptimizer implements BaseOptimizer {
 
     /**
      * Optimize {@code root} and record every rule-fire into {@code trace}.
-     * Preprocessing and postprocessing aligned with CostBaseOptimizer:
-     * <ol>
-     *   <li>FilterSplitter — split AND filters for rule matching</li>
-     *   <li>InSubFilterExpander — expose IN-subqueries as two-child operators</li>
-     *   <li>HepPlanner — apply rules (BOTTOM_UP)</li>
-     *   <li>SubQueryTreeResolver — resolve RelSubset/InSubFilter in RexSubQuery trees</li>
-     *   <li>FilterMerger — merge split filters back for clean SQL</li>
-     * </ol>
      */
     public RelNode optimize(RelNode root, OptimizationTrace trace) {
         if (rules.isEmpty()) {
@@ -149,9 +141,6 @@ public class RuleBaseOptimizer implements BaseOptimizer {
 
         planner.setRoot(root);
         RelNode result = planner.findBestExp();
-
-        // Post-process: aligned with CostBaseOptimizer
-        result = SubQueryTreeResolver.resolve(result);
 
         // Save the plan before FilterMerger for debugging/comparison with WeTune
         result = RedundantProjectRemover.remove(result);
