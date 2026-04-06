@@ -471,13 +471,17 @@ public class Match {
         RelNode qLeftChild = unwrapHepVertex(flipped ? query.getRight() : query.getLeft());
         RelNode qRightChild = unwrapHepVertex(flipped ? query.getLeft() : query.getRight());
 
-        // Find join key symbols: first try constraints, then template children field names
+        // Find join key symbols from template children.
+        // Pass leftKeySym as exclusion to findJoinKeySymbol for the right child,
+        // so that when multiple AttrsSub constraints reference the same table
+        // (e.g., AttrsSub(a0,t1) and AttrsSub(a1,t1)), the right side picks
+        // the one not already taken by the left side.
         Constraints constraints = model.constraints();
         RelNode tLeft = unwrapHepVertex(template.getLeft());
         RelNode tRight = unwrapHepVertex(template.getRight());
 
-        Symbol leftKeySym = findJoinKeySymbol(constraints, tLeft);
-        Symbol rightKeySym = findJoinKeySymbol(constraints, tRight);
+        Symbol leftKeySym = findJoinKeySymbol(constraints, tLeft, null);
+        Symbol rightKeySym = findJoinKeySymbol(constraints, tRight, leftKeySym);
 
         for (int[] qPair : queryPairs) {
             int qLeftIdx = flipped ? (qPair[1] - qLeftFieldCount) : qPair[0];
@@ -500,6 +504,10 @@ public class Match {
     /**
      * Find the attrs symbol for a join child — the column used as the equi-join key.
      *
+     * @param exclude symbol already claimed by the other join side (may be null).
+     *                When multiple AttrsSub constraints reference the same table,
+     *                this prevents both sides from picking the same symbol.
+     *
      * Strategy:
      * 1. For Proj children: prefer schema-based (s\d+) AttrsSub lookup, since the
      *    Proj's output schema defines the join key, not the underlying table.
@@ -508,7 +516,7 @@ public class Match {
      * 2. Otherwise: find the child's table symbol (t\d+) and look up AttrsSub
      * 3. Fallback: use the child's first a\d+ field name
      */
-    private static Symbol findJoinKeySymbol(Constraints constraints, RelNode child) {
+    private static Symbol findJoinKeySymbol(Constraints constraints, RelNode child, Symbol exclude) {
         child = unwrapHepVertex(child);
 
         if (constraints != null) {
@@ -520,7 +528,9 @@ public class Match {
                     Symbol[] syms = c.symbols();
                     String name = syms[1].name();
                     if (name.charAt(0) == 's' && SymbolKind.isSymbolName(name)) {
-                        return syms[0];
+                        if (!syms[0].equals(exclude)) {
+                            return syms[0];
+                        }
                     }
                 }
             }
@@ -532,7 +542,9 @@ public class Match {
                 for (Constraint c : constraints.ofKind(ConstraintKind.ATTRS_SUB)) {
                     Symbol[] syms = c.symbols();
                     if (syms[1].equals(tableSym)) {
-                        return syms[0];
+                        if (!syms[0].equals(exclude)) {
+                            return syms[0];
+                        }
                     }
                 }
             }
@@ -542,7 +554,10 @@ public class Match {
         List<String> fieldNames = child.getRowType().getFieldNames();
         for (String fn : fieldNames) {
             if (SymbolKind.isSymbolName(fn) && fn.charAt(0) == 'a') {
-                return Symbol.of(fn);
+                Symbol sym = Symbol.of(fn);
+                if (!sym.equals(exclude)) {
+                    return sym;
+                }
             }
         }
 
