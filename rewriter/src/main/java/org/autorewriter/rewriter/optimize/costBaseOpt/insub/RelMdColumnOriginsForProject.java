@@ -39,8 +39,18 @@ public class RelMdColumnOriginsForProject
     public Set<RelColumnOrigin> getColumnOrigins(
             Project rel, RelMetadataQuery mq, int iOutputColumn) {
         RexNode expr = rel.getProjects().get(iOutputColumn);
-        if (expr instanceof RexInputRef) {
-            int inputIndex = ((RexInputRef) expr).getIndex();
+
+        // Unwrap CAST — e.g., CAST($40):INTEGER is just $40 with a type adjustment
+        // (typically nullability changes from adjustRowType). The column origin is
+        // the same as the underlying RexInputRef.
+        RexNode unwrapped = expr;
+        while (unwrapped instanceof org.apache.calcite.rex.RexCall
+                && ((org.apache.calcite.rex.RexCall) unwrapped).getKind() == org.apache.calcite.sql.SqlKind.CAST) {
+            unwrapped = ((org.apache.calcite.rex.RexCall) unwrapped).getOperands().get(0);
+        }
+
+        if (unwrapped instanceof RexInputRef) {
+            int inputIndex = ((RexInputRef) unwrapped).getIndex();
             RelNode input = unwrap(rel.getInput());
             return mq.getColumnOrigins(input, inputIndex);
         }

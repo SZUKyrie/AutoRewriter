@@ -554,16 +554,14 @@ RewritePathE2ETest extends AutoRwFakeE2ETesBase {
     }
 
     /**
-     * Replace 'k' placeholders (k0, k1, ...) with 'a' placeholders offset by +20
-     * (a20, a21, ...) to avoid collisions with existing 'a' symbols (a0-a10).
+     * Replace 'k' placeholders (k0, k1, ...) with 'a' placeholders (a0, a1, ...).
      */
     private static String replaceKPlaceholders(String template) {
         Pattern p = Pattern.compile("\\bk(\\d+)");
         Matcher m = p.matcher(template);
         StringBuffer sb = new StringBuffer();
         while (m.find()) {
-            int num = Integer.parseInt(m.group(1));
-            m.appendReplacement(sb, "a" + (num + 20));
+            m.appendReplacement(sb, "a" + m.group(1));
         }
         m.appendTail(sb);
         return sb.toString();
