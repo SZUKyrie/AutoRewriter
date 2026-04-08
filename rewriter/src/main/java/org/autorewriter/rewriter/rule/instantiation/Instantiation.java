@@ -217,7 +217,9 @@ public class Instantiation {
         RelNode result = LogicalFilter.create(child, condition);
 
         // Re-apply unmatched filters scoped to this filter's predicate symbol (virtualExpr).
-        result = applyVirtualExprs(condition, result);
+        // Pass the TEMPLATE condition (not the instantiated one) because extractPredSymbol
+        // needs the placeholder operator name (p\d+) to find the virtualExpr key.
+        result = applyVirtualExprs(templateCond, result);
 
         return result;
     }

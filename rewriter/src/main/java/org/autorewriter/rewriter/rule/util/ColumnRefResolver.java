@@ -66,6 +66,20 @@ public final class ColumnRefResolver {
                 String tableName = String.join(".", table.getQualifiedName());
                 int originCol = origin.getOriginColumnOrdinal();
                 String columnName = table.getRowType().getFieldNames().get(originCol);
+
+                // Self-join disambiguation: when the same table.column appears at
+                // multiple positions in the operator (e.g., contacts.user_id from
+                // two different contacts scans in a self-join), use the operator's
+                // field name to disambiguate. Calcite already appends numeric
+                // suffixes (user_id vs user_id0) to disambiguate field names.
+                String operatorFieldName = unwrapped.getRowType().getFieldNames().get(fieldIndex);
+                if (!operatorFieldName.equalsIgnoreCase(columnName)) {
+                    // Field name differs from origin column name (e.g., "user_id0" vs "user_id"),
+                    // indicating a self-join duplicate. Append positional tag to table name
+                    // to create a unique identity, consistent with ColumnRefRegistry.computeJoin().
+                    tableName = tableName + "$" + fieldIndex;
+                }
+
                 return new ColumnRef(tableName, columnName);
             }
         }

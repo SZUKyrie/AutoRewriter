@@ -125,6 +125,15 @@ public class RuleBaseOptimizer implements BaseOptimizer {
      * Optimize {@code root} and record every rule-fire into {@code trace}.
      */
     public RelNode optimize(RelNode root, OptimizationTrace trace) {
+        return optimize(root, trace, false);
+    }
+
+    /**
+     * Optimize {@code root} and record every rule-fire into {@code trace}.
+     * When {@code captureFullPlan} is true, each trace step will include
+     * a snapshot of the full plan after the rule fired.
+     */
+    public RelNode optimize(RelNode root, OptimizationTrace trace, boolean captureFullPlan) {
         if (rules.isEmpty()) {
             return root;
         }
@@ -136,7 +145,8 @@ public class RuleBaseOptimizer implements BaseOptimizer {
         ensurePlannerBuilt();
 
         if (trace != null) {
-            planner.addListener(new RuleTraceListener(trace));
+            planner.addListener(new RuleTraceListener(trace,
+                    captureFullPlan ? planner : null));
         }
 
         planner.setRoot(root);

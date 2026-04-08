@@ -75,6 +75,26 @@ public class OptimizationTrace {
     }
 
     /**
+     * Detailed summary that includes the full intermediate plan after each rule fires.
+     * If full plan snapshots were not captured (planner reference not provided),
+     * falls back to the same output as {@link #summary()}.
+     */
+    public String detailedSummary() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Optimization Trace (").append(steps.size()).append(" rules fired):\n");
+        for (RuleApplicationStep step : steps) {
+            sb.append("  ").append(step).append("\n");
+            if (step.getFullPlanAfterStep() != null) {
+                sb.append("  [Intermediate Plan]\n");
+                for (String line : step.getFullPlanAfterStep().split("\n")) {
+                    sb.append("    ").append(line).append("\n");
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
      * Human-readable path-based summary for CBO traces.
      * <p>
      * Reconstructs optimization paths by chaining steps where one step's

@@ -88,8 +88,6 @@ public class AutoRewriteRule extends RelOptRule {
             return false;
         }
 
-        //log.info("Rule[{}] match succeeded", ruleId);
-
         // Cache for onMatch() and assertion re-check
         matchCache.put(queryNode, model);
 

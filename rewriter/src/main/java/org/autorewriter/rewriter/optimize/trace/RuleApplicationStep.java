@@ -1,6 +1,7 @@
 package org.autorewriter.rewriter.optimize.trace;
 
 import lombok.Getter;
+import lombok.Setter;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.convert.ConverterRule;
@@ -28,6 +29,13 @@ public class RuleApplicationStep {
      * This is the new subtree root AFTER the transformation.
      */
     private final RelNode producedRelNode;
+
+    /**
+     * Snapshot of the full plan (planner root explain()) after this rule fired.
+     * Only populated when the listener has access to the planner (e.g. ManualProducePipeline).
+     */
+    @Setter
+    private String fullPlanAfterStep;
 
     public RuleApplicationStep(int stepIndex,
                                RelOptRule rule,

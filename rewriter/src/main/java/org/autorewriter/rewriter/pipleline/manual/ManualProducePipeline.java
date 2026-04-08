@@ -18,6 +18,7 @@ import org.autorewriter.rewriter.historical.HistoricalSqlRecord;
 
 import java.util.List;
 import org.autorewriter.rewriter.optimize.OptimizeResult;
+import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
 import org.autorewriter.rewriter.optimize.ruleBaseOpt.RuleBaseOptimizer;
 import org.autorewriter.rewriter.optimize.ruleBaseOpt.RuleTemplateSimplifier;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
@@ -55,14 +56,17 @@ public class ManualProducePipeline extends ProducePipeline {
             }
 
             RelNode sourceTemplate = InSubFilterExpander.expand(ruleContext.getSourceRelNode());
+            sourceTemplate = FilterSplitter.split(sourceTemplate);
+
             RelNode targetTemplate = InSubFilterExpander.expand(ruleContext.getTargetRelNode());
+            targetTemplate = FilterSplitter.split(targetTemplate);
+
             RuleAnalysisContext expandedContext = new RuleAnalysisContext(
                     sourceTemplate, targetTemplate,
                     ruleContext.getMatchConstraints(), ruleContext.getRewriteConstraints());
 
             // Register original rule
-            Class<? extends RelNode> rootClass =
-                    (Class<? extends RelNode>) expandedContext.getSourceRelNode().getClass();
+            Class<? extends RelNode> rootClass = expandedContext.getSourceRelNode().getClass();
             AutoRewriteRule rule = new AutoRewriteRule(
                     RelOptRule.operand(rootClass, RelOptRule.any()),
                     expandedContext,
@@ -78,8 +82,7 @@ public class ManualProducePipeline extends ProducePipeline {
                 if (strippedContext.isNoOp()) {
                     continue;
                 }
-                Class<? extends RelNode> strippedRootClass =
-                        (Class<? extends RelNode>) strippedContext.getSourceRelNode().getClass();
+                Class<? extends RelNode> strippedRootClass = strippedContext.getSourceRelNode().getClass();
                 AutoRewriteRule strippedRule = new AutoRewriteRule(
                         RelOptRule.operand(strippedRootClass, RelOptRule.any()),
                         strippedContext,
@@ -103,7 +106,7 @@ public class ManualProducePipeline extends ProducePipeline {
 
             OptimizationTrace trace = new OptimizationTrace();
             long startTime = System.currentTimeMillis();
-            RelNode optimizedRelNode = optimizer.optimize(relNode, trace);
+            RelNode optimizedRelNode = optimizer.optimize(relNode, trace, true);
             long endTime = System.currentTimeMillis();
             long optimizationTimeInMs = endTime - startTime;
 
@@ -114,7 +117,7 @@ public class ManualProducePipeline extends ProducePipeline {
                 optimizeResult.setOptimizationTimeInMs(optimizationTimeInMs);
                 optimizeResult.setOriginalRelNode(relNode);
             } else {
-                log.info("query {} is optimized. {}", historicalSqlRecord.getQueryId(), trace.summary());
+                log.info("query {} is optimized. {}", historicalSqlRecord.getQueryId(), trace.detailedSummary());
                 if (trace.getRawOptimizedPlan() != null) {
                     log.info("optimized plan (before filter merge):\n{}", trace.getRawOptimizedPlan().explain());
                 }
