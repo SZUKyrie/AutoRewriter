@@ -214,7 +214,13 @@ public class Model {
         if (!(v0 instanceof List) || !(v1 instanceof List)) return false;
         List<ColumnRef> a0 = (List<ColumnRef>) v0;
         List<ColumnRef> a1 = (List<ColumnRef>) v1;
-        return a0.equals(a1);
+        if (a0.size() != a1.size()) return false;
+        // Compare at schema level (strip self-join disambiguation suffix),
+        // aligned with WeTune's isAttrsEq which compares Column objects.
+        for (int i = 0; i < a0.size(); i++) {
+            if (!a0.get(i).schemaEquals(a1.get(i))) return false;
+        }
+        return true;
     }
 
     /**
