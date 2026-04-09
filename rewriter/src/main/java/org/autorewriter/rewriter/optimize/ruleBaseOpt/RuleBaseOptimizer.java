@@ -9,10 +9,12 @@ import org.apache.calcite.plan.hep.HepPlanner;
 import org.apache.calcite.plan.hep.HepProgram;
 import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.rules.AggregateProjectMergeRule;
+import org.apache.calcite.rel.rules.ProjectMergeRule;
+import org.apache.calcite.rel.rules.ProjectRemoveRule;
 import org.autorewriter.rewriter.optimize.BaseOptimizer;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.FilterToInSubFilterRule;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
-import org.autorewriter.rewriter.optimize.costBaseOpt.insub.SubQueryTreeResolver;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterMerger;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
 import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.RedundantProjectRemover;
@@ -152,8 +154,11 @@ public class RuleBaseOptimizer implements BaseOptimizer {
         planner.setRoot(root);
         RelNode result = planner.findBestExp();
 
-        // Save the plan before FilterMerger for debugging/comparison with WeTune
+        // Post-process: remove redundant projects and merge consecutive projects
         result = RedundantProjectRemover.remove(result);
+        result = simplifyProjects(result);
+        result = RedundantProjectRemover.remove(result);
+
         if (trace != null) {
             trace.setRawOptimizedPlan(result);
         }
@@ -173,5 +178,22 @@ public class RuleBaseOptimizer implements BaseOptimizer {
 
     public int getRuleCount() {
         return this.rules.size();
+    }
+
+    /**
+     * Simplify the plan by merging/removing redundant Project nodes using
+     * Calcite's built-in rules:
+     * - ProjectMergeRule: merge consecutive Project nodes
+     * - ProjectRemoveRule: remove identity projections
+     */
+    private static RelNode simplifyProjects(RelNode root) {
+        HepProgramBuilder builder = new HepProgramBuilder();
+        builder.addMatchOrder(HepMatchOrder.BOTTOM_UP);
+        builder.addRuleInstance(ProjectMergeRule.Config.DEFAULT.toRule());
+        builder.addRuleInstance(ProjectRemoveRule.Config.DEFAULT.toRule());
+        builder.addRuleInstance(AggregateProjectMergeRule.Config.DEFAULT.toRule());
+        HepPlanner hep = new HepPlanner(builder.build());
+        hep.setRoot(root);
+        return hep.findBestExp();
     }
 }

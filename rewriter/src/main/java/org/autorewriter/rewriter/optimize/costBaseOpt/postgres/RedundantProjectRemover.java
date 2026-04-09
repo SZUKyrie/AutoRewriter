@@ -94,7 +94,12 @@ public class RedundantProjectRemover extends RelShuttleImpl {
 
     /**
      * Check if a project is an identity projection: outputs all input columns
-     * in the same order with no expressions, and field names match.
+     * in the same order with no expressions.
+     * <p>
+     * Field name differences are ignored because parent nodes reference columns
+     * by index ($i), not by name. Rewrite rules often produce identity projections
+     * whose field names differ from the input (e.g. "id0" vs "id10") due to
+     * Calcite's automatic deduplication of field names at different tree depths.
      */
     private static boolean isIdentity(Project project, RelNode input) {
         RelNode unwrappedInput = unwrap(input);
@@ -113,15 +118,6 @@ public class RedundantProjectRemover extends RelShuttleImpl {
                 return false;
             }
             if (((RexInputRef) expr).getIndex() != i) {
-                return false;
-            }
-        }
-
-        // Field names must match (avoid removing projects that rename columns)
-        List<RelDataTypeField> projFields = project.getRowType().getFieldList();
-        List<RelDataTypeField> inputFields = inputType.getFieldList();
-        for (int i = 0; i < projFields.size(); i++) {
-            if (!projFields.get(i).getName().equals(inputFields.get(i).getName())) {
                 return false;
             }
         }

@@ -119,7 +119,7 @@ public class ManualProducePipeline extends ProducePipeline {
             } else {
                 log.info("query {} is optimized. {}", historicalSqlRecord.getQueryId(), trace.detailedSummary());
                 if (trace.getRawOptimizedPlan() != null) {
-                    log.info("optimized plan (before filter merge):\n{}", trace.getRawOptimizedPlan().explain());
+                    log.info("raw optimized plan (before filter merge):\n{}", trace.getRawOptimizedPlan().explain());
                 }
                 log.info("optimized query:\n {}", relNodeToSql(optimizedRelNode));
                 optimizeResult.setRewritten(true);

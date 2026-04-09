@@ -4,8 +4,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelOptRuleOperand;
+import org.apache.calcite.plan.hep.HepMatchOrder;
+import org.apache.calcite.plan.hep.HepPlanner;
+import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.logical.LogicalProject;
+import org.apache.calcite.rel.rules.AggregateProjectMergeRule;
+import org.apache.calcite.rel.rules.ProjectMergeRule;
+import org.apache.calcite.rel.rules.ProjectRemoveRule;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
@@ -134,6 +140,8 @@ public class AutoRewriteRule extends RelOptRule {
             return;
         }
 
+        adjustedNode = simplifyProjects(adjustedNode);
+
         call.transformTo(adjustedNode);
     }
 
@@ -197,6 +205,17 @@ public class AutoRewriteRule extends RelOptRule {
         }
 
         return LogicalProject.create(node, Collections.emptyList(), castExprs, fieldNames);
+    }
+
+    private static RelNode simplifyProjects(RelNode root) {
+        HepProgramBuilder builder = new HepProgramBuilder();
+        builder.addMatchOrder(HepMatchOrder.BOTTOM_UP);
+        builder.addRuleInstance(ProjectMergeRule.Config.DEFAULT.toRule());
+        builder.addRuleInstance(ProjectRemoveRule.Config.DEFAULT.toRule());
+        builder.addRuleInstance(AggregateProjectMergeRule.Config.DEFAULT.toRule());
+        HepPlanner hep = new HepPlanner(builder.build());
+        hep.setRoot(root);
+        return hep.findBestExp();
     }
 
 }
