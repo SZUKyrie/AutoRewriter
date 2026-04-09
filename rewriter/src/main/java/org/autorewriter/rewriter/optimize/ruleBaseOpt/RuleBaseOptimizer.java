@@ -100,6 +100,8 @@ public class RuleBaseOptimizer implements BaseOptimizer {
         // Build HepProgram
         HepProgramBuilder programBuilder = new HepProgramBuilder();
         programBuilder.addMatchOrder(matchOrder);
+        // Limit total rule matches to prevent infinite loops (e.g. join commute A⋈B → B⋈A → ...)
+        programBuilder.addMatchLimit(maxIterations);
 
         // FilterToInSubFilterRule: when Instantiation produces LogicalFilter(IN RexSubQuery)
         // as a rule target, this rule converts it to LogicalInSubFilter so that subsequent
