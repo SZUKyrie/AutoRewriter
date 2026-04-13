@@ -15,6 +15,7 @@ import org.autorewriter.rewriter.optimize.costBaseOpt.CostBaseOptimizer;
 import org.autorewriter.rewriter.optimize.costBaseOpt.DistinctAggregateStripper;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterExpander;
 import org.autorewriter.rewriter.optimize.costBaseOpt.insub.InSubFilterSqlConverter;
+import org.autorewriter.rewriter.optimize.costBaseOpt.postgres.FilterSplitter;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.pipleline.ProduceContext;
 import org.autorewriter.rewriter.pipleline.ProducePipeline;
@@ -46,11 +47,12 @@ public class CostBaseProducePipeline extends ProducePipeline {
                 continue;
             }
 
-            // Preprocess the source template: convert Filter(IN subquery) to
-            // LogicalInSubFilter so it matches the query plan structure after
-            // InSubFilterExpander preprocessing in CostBaseOptimizer.
             RelNode sourceTemplate = InSubFilterExpander.expand(ruleContext.getSourceRelNode());
+            sourceTemplate = FilterSplitter.split(sourceTemplate);
+
             RelNode targetTemplate = InSubFilterExpander.expand(ruleContext.getTargetRelNode());
+            targetTemplate = FilterSplitter.split(targetTemplate);
+
             RuleAnalysisContext expandedContext = new RuleAnalysisContext(
                     sourceTemplate, targetTemplate,
                     ruleContext.getMatchConstraints(),
@@ -119,7 +121,7 @@ public class CostBaseProducePipeline extends ProducePipeline {
                 optimizeResult.setOptimizationTimeInMs(optimizationTimeInMs);
                 optimizeResult.setOriginalRelNode(relNode);
             } else {
-                //log.info("query {} is optimized by CBO.\n{}", historicalSqlRecord.getQueryId(), trace.derivationChains());
+                log.info("query {} is optimized by CBO.\n{}", historicalSqlRecord.getQueryId(), trace.derivationChains());
                 log.info("optimized plan:\n{}", optimizedRelNode.explain());
                 log.info("optimized query:\n {}", relNodeToSql(optimizedRelNode));
                 optimizeResult.setRewritten(true);

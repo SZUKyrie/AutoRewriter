@@ -91,7 +91,6 @@ public class CostBaseOptimizer implements BaseOptimizer {
     public RelNode optimize(RelNode root, OptimizationTrace trace) {
         // Preprocess: split AND-conjoined filters into individual filter nodes
         root = FilterSplitter.split(root);
-
         root = InSubFilterExpander.expand(root);
 
         VolcanoPlanner planner;
@@ -143,8 +142,7 @@ public class CostBaseOptimizer implements BaseOptimizer {
 
         RelOptCluster cluster = root.getCluster();
         try {
-            java.lang.reflect.Field plannerField =
-                    RelOptCluster.class.getDeclaredField("planner");
+            java.lang.reflect.Field plannerField = RelOptCluster.class.getDeclaredField("planner");
             plannerField.setAccessible(true);
             plannerField.set(cluster, planner);
         } catch (Exception e) {
@@ -152,14 +150,11 @@ public class CostBaseOptimizer implements BaseOptimizer {
         }
 
         // Set desired physical convention on the root
-        RelTraitSet desiredTraits = root.getTraitSet()
-                .replace(convention);
+        RelTraitSet desiredTraits = root.getTraitSet().replace(convention);
         root = planner.changeTraits(root, desiredTraits);
         planner.setRoot(root);
 
         RelNode bestPlan = planner.findBestExp();
-
-        //bestPlan = SubQueryTreeResolver.resolve(bestPlan);
 
         bestPlan = FilterMerger.merge(bestPlan);
         bestPlan = RedundantProjectRemover.remove(bestPlan);
