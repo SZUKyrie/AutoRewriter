@@ -18,6 +18,7 @@
         <module>common</module>
         <module>test</module>
         <module>rewriter</module>
+        <module>graph</module>
     </modules>
 
     <properties>
