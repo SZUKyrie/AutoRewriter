@@ -143,6 +143,10 @@ public class AutoRwFakeE2ETesBase extends PostgresqlSchemaTestBase {
         return pipeline.run(context);
     }
 
+    public ProduceContext createContextPublic(String ddlDirname, String ruleDirname) {
+        return createContext(ddlDirname, ruleDirname);
+    }
+
     private ProduceContext createContext(String ddlDirname, String ruleDirname) {
         // read sql statements from query dir
         String queryDir = ddlDirname + "/query";

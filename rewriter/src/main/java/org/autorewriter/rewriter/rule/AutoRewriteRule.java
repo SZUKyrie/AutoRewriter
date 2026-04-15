@@ -45,6 +45,10 @@ public class AutoRewriteRule extends RelOptRule {
     // need per-node caching (not just single-entry) to handle concurrent matches.
     private final Map<RelNode, Model> matchCache = new IdentityHashMap<>();
 
+    public int getRuleId() { return ruleId; }
+    public RelNode getSourceTemplate() { return sourceTemplate; }
+    public RelNode getTargetTemplate() { return targetTemplate; }
+
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext) {
         this(operand, ruleContext, -1);
     }

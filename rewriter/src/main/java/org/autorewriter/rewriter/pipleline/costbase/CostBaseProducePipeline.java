@@ -29,6 +29,22 @@ import java.util.List;
 @Slf4j
 public class CostBaseProducePipeline extends ProducePipeline {
 
+    /**
+     * Optional: when non-null, each completed {@link OptimizationTrace} is forwarded
+     * to this consumer (e.g. a GraphModule instance in the {@code graph} module).
+     */
+    private org.autorewriter.rewriter.optimize.trace.TraceConsumer traceConsumer;
+
+    /**
+     * Inject a {@link org.autorewriter.rewriter.optimize.trace.TraceConsumer} for recording
+     * optimization traces. Supports method chaining.
+     */
+    public CostBaseProducePipeline withTraceConsumer(
+            org.autorewriter.rewriter.optimize.trace.TraceConsumer consumer) {
+        this.traceConsumer = consumer;
+        return this;
+    }
+
     @Override
     protected ProduceStage lastStage() {
         return ProduceStage.ONLINE;
@@ -114,6 +130,9 @@ public class CostBaseProducePipeline extends ProducePipeline {
             long optimizationTimeInMs = System.currentTimeMillis() - startTime;
 
             optimizeResult.setTrace(trace);
+            if (traceConsumer != null) {
+                traceConsumer.consume(trace);
+            }
             if (optimizedRelNode.deepEquals(relNode)) {
                 log.info("query {} cannot be optimized by CBO, optimize time: {} ms",
                         historicalSqlRecord.getQueryId(), optimizationTimeInMs);
