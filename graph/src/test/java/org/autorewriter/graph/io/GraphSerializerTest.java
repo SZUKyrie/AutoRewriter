@@ -17,30 +17,43 @@ class GraphSerializerTest {
     @TempDir
     Path tempDir;
 
+    private static RuleNode node(int ruleId, String srcSig, String tgtSig, String matchedSig, int obs) {
+        return new RuleNode(RuleNode.keyOf(ruleId, matchedSig), ruleId, srcSig, tgtSig, matchedSig, obs);
+    }
+
+    private static DependencyEdge edge(int fromId, String fromMatchedSig,
+                                       int toId,   String toMatchedSig,
+                                       int count, double benefit) {
+        return new DependencyEdge(
+                RuleNode.keyOf(fromId, fromMatchedSig),
+                RuleNode.keyOf(toId,   toMatchedSig),
+                count, benefit);
+    }
+
     @Test
     void testRoundTrip() throws Exception {
-        RuleNode nodeA = new RuleNode(0, "Filter-LeftJoin-Input-Input", "InnerJoin-Input-Input", 10);
-        RuleNode nodeB = new RuleNode(1, "InnerJoin-Input-Input", "Project-InnerJoin-Input-Input", 7);
-        DependencyEdge edge = new DependencyEdge(0, 1, 7, 8750.0);
+        RuleNode nodeA = node(0, "Filter-LeftJoin", "InnerJoin", "Filter-LeftJoin", 10);
+        RuleNode nodeB = node(1, "InnerJoin",       "Project",   "InnerJoin",       7);
+        DependencyEdge e = edge(0, "Filter-LeftJoin", 1, "InnerJoin", 7, 8750.0);
 
         RuleDependencyGraph original = new RuleDependencyGraph(
-                Map.of(0, nodeA, 1, nodeB),
-                Map.of(0, List.of(edge)));
+                Map.of(nodeA.getNodeKey(), nodeA, nodeB.getNodeKey(), nodeB),
+                Map.of(nodeA.getNodeKey(), List.of(e)));
 
         GraphSerializer serializer = new GraphSerializer();
         Path file = tempDir.resolve("graph.json");
-
         serializer.serialize(original, file);
         assertTrue(file.toFile().exists());
 
         RuleDependencyGraph restored = serializer.deserialize(file);
-
         assertEquals(2, restored.nodeCount());
         assertEquals(1, restored.edgeCount());
-        assertEquals("Filter-LeftJoin-Input-Input", restored.getNode(0).getSourceTemplateSignature());
-        assertEquals(10, restored.getNode(0).getObservationCount());
-        assertEquals(7, restored.getOutEdges(0).get(0).getFireCount());
-        assertEquals(8750.0 / 7, restored.getOutEdges(0).get(0).getAvgBenefit(), 1e-6);
+
+        String keyA = RuleNode.keyOf(0, "Filter-LeftJoin");
+        assertEquals("Filter-LeftJoin", restored.getNode(keyA).getSourceTemplateSignature());
+        assertEquals(10, restored.getNode(keyA).getObservationCount());
+        assertEquals(7, restored.getOutEdges(keyA).get(0).getFireCount());
+        assertEquals(8750.0 / 7, restored.getOutEdges(keyA).get(0).getAvgBenefit(), 1e-6);
     }
 
     @Test

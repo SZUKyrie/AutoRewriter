@@ -6,42 +6,46 @@ import lombok.Getter;
 
 /**
  * A directed edge in the rule dependency graph.
- * fromRuleId → toRuleId means: after fromRule fired, toRule was subsequently observed to fire.
+ *
+ * <p>{@code fromNodeKey} → {@code toNodeKey} means: the firing represented by
+ * {@code fromNodeKey} produced a RelNode that was subsequently matched and
+ * consumed by the firing represented by {@code toNodeKey}.
+ *
+ * <p>Node keys have the form {@code "ruleId:matchedNodeSignature"}.
  */
 @Getter
 public class DependencyEdge {
 
-    private final int    fromRuleId;
-    private final int    toRuleId;
+    private final String fromNodeKey;
+    private final String toNodeKey;
     private       int    fireCount;
     private       double totalBenefit;
 
     @JsonCreator
     public DependencyEdge(
-            @JsonProperty("fromRuleId")   int    fromRuleId,
-            @JsonProperty("toRuleId")     int    toRuleId,
+            @JsonProperty("fromNodeKey")  String fromNodeKey,
+            @JsonProperty("toNodeKey")    String toNodeKey,
             @JsonProperty("fireCount")    int    fireCount,
             @JsonProperty("totalBenefit") double totalBenefit) {
-        this.fromRuleId   = fromRuleId;
-        this.toRuleId     = toRuleId;
+        this.fromNodeKey  = fromNodeKey;
+        this.toNodeKey    = toNodeKey;
         this.fireCount    = fireCount;
         this.totalBenefit = totalBenefit;
     }
 
-    /** Record one more observation of this A→B transition. */
     public void recordFire(double benefit) {
         this.fireCount++;
         this.totalBenefit += benefit;
     }
 
-    /** P(toRule fires | fromRule fired) */
+    /** P(toNode fires | fromNode fired) */
     @JsonProperty("probability")
     public double getProbability(int fromObservationCount) {
         if (fromObservationCount == 0) return 0.0;
         return (double) fireCount / fromObservationCount;
     }
 
-    /** E[benefit(toRule) | fromRule fired] */
+    /** E[benefit(toNode) | fromNode fired] */
     @JsonProperty("avgBenefit")
     public double getAvgBenefit() {
         if (fireCount == 0) return 0.0;

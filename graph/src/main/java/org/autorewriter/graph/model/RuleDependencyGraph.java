@@ -8,21 +8,25 @@ import java.util.*;
 
 /**
  * In-memory rule dependency graph.
- * Nodes are AutoRewriteRules; edges represent observed A→B firing sequences.
+ *
+ * <p>Nodes are keyed by {@code "ruleId:matchedNodeSignature"}, so the same rule
+ * fired at different query sub-plan positions appears as distinct nodes.
+ * Edges represent observed A→B firing sequences connected by RelNode ID linkage
+ * (A.producedRelNode.getId() == B.matchedRelNode.getId()).
  */
 @Getter
 public class RuleDependencyGraph {
 
-    /** ruleId → RuleNode */
-    private final Map<Integer, RuleNode> nodes;
+    /** nodeKey → RuleNode */
+    private final Map<String, RuleNode> nodes;
 
-    /** ruleId → outgoing edges */
-    private final Map<Integer, List<DependencyEdge>> outEdges;
+    /** nodeKey → outgoing edges */
+    private final Map<String, List<DependencyEdge>> outEdges;
 
     @JsonCreator
     public RuleDependencyGraph(
-            @JsonProperty("nodes")    Map<Integer, RuleNode>            nodes,
-            @JsonProperty("outEdges") Map<Integer, List<DependencyEdge>> outEdges) {
+            @JsonProperty("nodes")    Map<String, RuleNode>            nodes,
+            @JsonProperty("outEdges") Map<String, List<DependencyEdge>> outEdges) {
         this.nodes    = nodes    != null ? nodes    : new HashMap<>();
         this.outEdges = outEdges != null ? outEdges : new HashMap<>();
     }
@@ -31,14 +35,12 @@ public class RuleDependencyGraph {
         this(new HashMap<>(), new HashMap<>());
     }
 
-    /** Returns outgoing edges for ruleId, or empty list if none. */
-    public List<DependencyEdge> getOutEdges(int ruleId) {
-        return outEdges.getOrDefault(ruleId, Collections.emptyList());
+    public List<DependencyEdge> getOutEdges(String nodeKey) {
+        return outEdges.getOrDefault(nodeKey, Collections.emptyList());
     }
 
-    /** Returns the node for ruleId, or null if not present. */
-    public RuleNode getNode(int ruleId) {
-        return nodes.get(ruleId);
+    public RuleNode getNode(String nodeKey) {
+        return nodes.get(nodeKey);
     }
 
     public int nodeCount() {

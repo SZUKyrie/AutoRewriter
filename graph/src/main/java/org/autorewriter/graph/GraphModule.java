@@ -13,6 +13,7 @@ import org.autorewriter.rewriter.optimize.trace.TraceConsumer;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -91,6 +92,11 @@ public class GraphModule implements TraceConsumer {
         record(trace);
     }
 
+    /** Build and return the current in-memory graph snapshot. */
+    public RuleDependencyGraph buildGraph() {
+        return builder.build();
+    }
+
     /** Persist the current graph state to disk. */
     public void flush() {
         try {
@@ -128,26 +134,28 @@ public class GraphModule implements TraceConsumer {
     }
 
     /**
-     * Rank candidate rules by observed transition probability from currentRuleId.
-     * Rules with no history are appended at the end in original order.
+     * Rank candidate node keys by observed transition probability from currentNodeKey.
+     * Nodes with no history are appended at the end in original order.
      *
-     * @param candidateRuleIds rules to rank
-     * @param currentRuleId    the rule that just fired (-1 if none)
+     * @param candidateNodeKeys node keys to rank (format: "ruleId:matchedSig")
+     * @param currentNodeKey    the node key that just fired (null if none)
      */
-    public List<Integer> rankRules(List<Integer> candidateRuleIds, int currentRuleId) {
+    public List<String> rankRules(List<String> candidateNodeKeys, String currentNodeKey) {
         RuleDependencyGraph graph = builder.build();
-        List<DependencyEdge> outEdges = graph.getOutEdges(currentRuleId);
+        List<DependencyEdge> outEdges = currentNodeKey != null
+                ? graph.getOutEdges(currentNodeKey)
+                : Collections.emptyList();
 
-        Map<Integer, Double> probMap = new HashMap<>();
-        int fromObs = graph.getNode(currentRuleId) != null
-                ? graph.getNode(currentRuleId).getObservationCount() : 0;
+        Map<String, Double> probMap = new HashMap<>();
+        int fromObs = currentNodeKey != null && graph.getNode(currentNodeKey) != null
+                ? graph.getNode(currentNodeKey).getObservationCount() : 0;
         for (DependencyEdge e : outEdges) {
-            probMap.put(e.getToRuleId(), e.getProbability(fromObs));
+            probMap.put(e.getToNodeKey(), e.getProbability(fromObs));
         }
 
-        List<Integer> ranked = new ArrayList<>(candidateRuleIds);
+        List<String> ranked = new ArrayList<>(candidateNodeKeys);
         ranked.sort(Comparator.comparingDouble(
-                (Integer id) -> probMap.getOrDefault(id, 0.0)).reversed());
+                (String key) -> probMap.getOrDefault(key, 0.0)).reversed());
         return ranked;
     }
 }

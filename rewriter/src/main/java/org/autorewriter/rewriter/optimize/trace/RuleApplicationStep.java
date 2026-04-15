@@ -7,7 +7,7 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.convert.ConverterRule;
 
 /**
- * Records a single successful rule application during HepPlanner optimization.
+ * Records a single successful rule application during optimization.
  */
 @Getter
 public class RuleApplicationStep {
@@ -20,7 +20,8 @@ public class RuleApplicationStep {
 
     /**
      * The RelNode that was matched by the rule (call.rel(0)).
-     * This is the subtree root BEFORE the transformation.
+     * In VolcanoPlanner this may be a RelSubset (equivalence class);
+     * in HepPlanner it is a concrete RelNode.
      */
     private final RelNode matchedRelNode;
 
@@ -31,8 +32,27 @@ public class RuleApplicationStep {
     private final RelNode producedRelNode;
 
     /**
+     * ID of the RelSubset (equivalence class) that was matched.
+     * Set to -1 when the matched node is not a RelSubset (e.g. HepPlanner).
+     *
+     * <p>In VolcanoPlanner, the produced node is added to a RelSet whose subsets
+     * share the same equivalence class. We use this ID to link A→B:
+     * if A.producedIntoSubsetId == B.matchedSubsetId, then B can follow A in a chain.
+     */
+    private final int matchedSubsetId;
+
+    /**
+     * ID of the RelSubset into which the produced node was registered.
+     * Set to -1 when unknown (e.g. HepPlanner or when not a RelSubset context).
+     *
+     * <p>Populated by RuleTraceListener when it can determine the target subset.
+     */
+    @Setter
+    private int producedIntoSubsetId = -1;
+
+    /**
      * Snapshot of the full plan (planner root explain()) after this rule fired.
-     * Only populated when the listener has access to the planner (e.g. ManualProducePipeline).
+     * Only populated when the listener has access to the planner.
      */
     @Setter
     private String fullPlanAfterStep;
@@ -41,10 +61,19 @@ public class RuleApplicationStep {
                                RelOptRule rule,
                                RelNode matchedRelNode,
                                RelNode producedRelNode) {
-        this.stepIndex = stepIndex;
-        this.rule = rule;
+        this(stepIndex, rule, matchedRelNode, producedRelNode, -1);
+    }
+
+    public RuleApplicationStep(int stepIndex,
+                               RelOptRule rule,
+                               RelNode matchedRelNode,
+                               RelNode producedRelNode,
+                               int matchedSubsetId) {
+        this.stepIndex      = stepIndex;
+        this.rule           = rule;
         this.matchedRelNode = matchedRelNode;
         this.producedRelNode = producedRelNode;
+        this.matchedSubsetId = matchedSubsetId;
     }
 
     @Override

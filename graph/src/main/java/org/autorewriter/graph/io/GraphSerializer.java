@@ -62,10 +62,10 @@ public class GraphSerializer {
         public int version = 1;
 
         @JsonProperty("nodes")
-        public Map<Integer, RuleNode> nodes;
+        public Map<String, RuleNode> nodes;
 
         @JsonProperty("outEdges")
-        public Map<Integer, List<DependencyEdge>> outEdges;
+        public Map<String, List<DependencyEdge>> outEdges;
 
         GraphDto() {}
 

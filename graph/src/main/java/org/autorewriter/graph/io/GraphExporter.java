@@ -29,17 +29,19 @@ public class GraphExporter {
 
     private void exportNodes(RuleDependencyGraph graph, Path file) throws IOException {
         try (BufferedWriter w = Files.newBufferedWriter(file)) {
-            w.write("ruleId,sourceSignature,targetSignature,observationCount,fireRate");
+            w.write("nodeKey,ruleId,sourceSignature,targetSignature,matchedNodeSignature,observationCount,fireRate");
             w.newLine();
             for (RuleNode node : graph.getNodes().values()) {
-                int totalOutFires = graph.getOutEdges(node.getRuleId())
+                int totalOutFires = graph.getOutEdges(node.getNodeKey())
                         .stream().mapToInt(DependencyEdge::getFireCount).sum();
                 double fireRate = node.getObservationCount() == 0 ? 0.0
                         : (double) totalOutFires / node.getObservationCount();
-                w.write(String.format("%d,%s,%s,%d,%f",
+                w.write(String.format("%s,%d,%s,%s,%s,%d,%f",
+                        escapeCsv(node.getNodeKey()),
                         node.getRuleId(),
                         escapeCsv(node.getSourceTemplateSignature()),
                         escapeCsv(node.getTargetTemplateSignature()),
+                        escapeCsv(node.getMatchedNodeSignature()),
                         node.getObservationCount(),
                         fireRate));
                 w.newLine();
@@ -49,16 +51,16 @@ public class GraphExporter {
 
     private void exportEdges(RuleDependencyGraph graph, Path file) throws IOException {
         try (BufferedWriter w = Files.newBufferedWriter(file)) {
-            w.write("fromRuleId,toRuleId,fireCount,probability,avgBenefit");
+            w.write("fromNodeKey,toNodeKey,fireCount,probability,avgBenefit");
             w.newLine();
-            for (Map.Entry<Integer, List<DependencyEdge>> entry : graph.getOutEdges().entrySet()) {
-                int fromId = entry.getKey();
-                RuleNode fromNode = graph.getNode(fromId);
+            for (Map.Entry<String, List<DependencyEdge>> entry : graph.getOutEdges().entrySet()) {
+                String fromKey = entry.getKey();
+                RuleNode fromNode = graph.getNode(fromKey);
                 int fromObs = fromNode != null ? fromNode.getObservationCount() : 0;
                 for (DependencyEdge edge : entry.getValue()) {
-                    w.write(String.format("%d,%d,%d,%f,%f",
-                            edge.getFromRuleId(),
-                            edge.getToRuleId(),
+                    w.write(String.format("%s,%s,%d,%f,%f",
+                            escapeCsv(edge.getFromNodeKey()),
+                            escapeCsv(edge.getToNodeKey()),
                             edge.getFireCount(),
                             edge.getProbability(fromObs),
                             edge.getAvgBenefit()));
@@ -76,3 +78,4 @@ public class GraphExporter {
         return value;
     }
 }
+

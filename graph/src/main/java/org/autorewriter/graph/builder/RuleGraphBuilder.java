@@ -10,100 +10,139 @@ import org.autorewriter.rewriter.optimize.trace.RuleApplicationStep;
 import org.autorewriter.rewriter.rule.AutoRewriteRule;
 
 import java.util.*;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Incrementally builds a {@link RuleDependencyGraph} from {@link OptimizationTrace} records.
  *
- * <p>Uses the same producedRelNode.getId() → matchedRelNode.getId() adjacency logic
- * as OptimizationTrace#pathSummary() to reconstruct firing chains.
+ * <p>Graph nodes are keyed by {@code "ruleId:matchedNodeSignature"}, so the same rule
+ * fired at different query sub-plan positions appears as distinct nodes.
+ *
+ * <p>Edges are built using RelNode ID linkage:
+ * {@code stepA.producedRelNode.getId() == stepB.matchedRelNode.getId()}
+ * means stepA → stepB (A's output was consumed by B).
+ * This mirrors the adjacency logic in {@link OptimizationTrace#pathSummary()}.
  */
 @Slf4j
 public class RuleGraphBuilder {
 
-    private final Map<Integer, Integer> observationCounts = new HashMap<>();
-    private final Map<Long, Integer>    edgeFireCounts    = new HashMap<>();
-    private final Map<Long, Double>     edgeTotalBenefits = new HashMap<>();
-    private final Map<Integer, String>  sourceSignatures  = new HashMap<>();
-    private final Map<Integer, String>  targetSignatures  = new HashMap<>();
+    /** nodeKey → accumulated observation count */
+    private final Map<String, Integer> observationCounts = new HashMap<>();
 
-    /**
-     * Process one query's OptimizationTrace and accumulate into internal counters.
-     */
+    /** (fromNodeKey, toNodeKey) → accumulated fire count */
+    private final Map<String, Integer> edgeFireCounts = new HashMap<>();
+
+    /** (fromNodeKey, toNodeKey) → accumulated total benefit */
+    private final Map<String, Double> edgeTotalBenefits = new HashMap<>();
+
+    /** nodeKey → RuleNode metadata (populated on first observation) */
+    private final Map<String, RuleNode> nodeMetadata = new HashMap<>();
+
     public void record(OptimizationTrace trace) {
-        // Step 1: collect distinct AutoRewriteRule firings in temporal order
-        Map<String, RuleApplicationStep> distinctMap = new LinkedHashMap<>();
+        List<RuleApplicationStep> autoSteps = new ArrayList<>();
         for (RuleApplicationStep step : trace.getSteps()) {
             if (step.getRule() instanceof AutoRewriteRule) {
-                distinctMap.putIfAbsent(step.getRule().toString(), step);
+                autoSteps.add(step);
             }
         }
-        if (distinctMap.isEmpty()) return;
+        if (autoSteps.isEmpty()) return;
 
-        // Step 2: update node observation counts (once per distinct rule per trace)
-        for (RuleApplicationStep step : distinctMap.values()) {
-            AutoRewriteRule rule = (AutoRewriteRule) step.getRule();
-            int ruleId = rule.getRuleId();
-            observationCounts.merge(ruleId, 1, Integer::sum);
-            sourceSignatures.putIfAbsent(ruleId, signatureOf(rule.getSourceTemplate()));
-            targetSignatures.putIfAbsent(ruleId, signatureOf(rule.getTargetTemplate()));
+        // Update node observation counts for every step
+        for (RuleApplicationStep step : autoSteps) {
+            String nodeKey = nodeKeyOf(step);
+            observationCounts.merge(nodeKey, 1, Integer::sum);
+            nodeMetadata.putIfAbsent(nodeKey, buildRuleNode(step, nodeKey));
         }
 
-        // Step 3: enumerate all ordered subsets → each subset is one chain → accumulate edges
-        List<RuleApplicationStep> distinctSteps = new ArrayList<>(distinctMap.values());
-        List<List<RuleApplicationStep>> chains = new ArrayList<>();
-        enumerateChains(distinctSteps, 0, new ArrayList<>(), chains);
+        // VolcanoPlanner applies rules in parallel (no strict causal chain).
+        // We model co-occurrence as a directed graph preserving temporal order:
+        // if rule A appears before rule B in the trace step sequence, we add A→B only.
+        //
+        // Two rules at the same matchedId (same sub-plan position) are direct
+        // alternatives; we still use temporal order to decide direction.
+        //
+        // Deduplication: use distinct (nodeKey) list so that a rule firing multiple
+        // times at the same position is counted only once per trace.
 
-        for (List<RuleApplicationStep> chain : chains) {
-            for (int i = 0; i + 1 < chain.size(); i++) {
-                int fromId = ((AutoRewriteRule) chain.get(i).getRule()).getRuleId();
-                int toId   = ((AutoRewriteRule) chain.get(i + 1).getRule()).getRuleId();
-                long key = edgeKey(fromId, toId);
-                edgeFireCounts.merge(key, 1, Integer::sum);
-                edgeTotalBenefits.merge(key, 0.0, Double::sum);
+        // Deduplicated ordered list of node keys (preserving first-occurrence order)
+        List<String> distinctKeys = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (RuleApplicationStep step : autoSteps) {
+            String key = nodeKeyOf(step);
+            if (seen.add(key)) {
+                distinctKeys.add(key);
+            }
+        }
+
+        // For every ordered pair (i < j), add a directed edge i → j only
+        for (int i = 0; i < distinctKeys.size(); i++) {
+            for (int j = i + 1; j < distinctKeys.size(); j++) {
+                String fromKey = distinctKeys.get(i);
+                String toKey   = distinctKeys.get(j);
+                if (!fromKey.equals(toKey)) {
+                    addEdge(fromKey, toKey);
+                }
             }
         }
     }
 
-    /**
-     * Build and return a RuleDependencyGraph from the accumulated state.
-     */
-    public RuleDependencyGraph build() {
-        Map<Integer, RuleNode>             nodes    = new HashMap<>();
-        Map<Integer, List<DependencyEdge>> outEdges = new HashMap<>();
+    private void addEdge(String fromKey, String toKey) {
+        String edgeKey = fromKey + "->" + toKey;
+        edgeFireCounts.merge(edgeKey, 1, Integer::sum);
+        edgeTotalBenefits.merge(edgeKey, 0.0, Double::sum);
+    }
 
-        for (Map.Entry<Integer, Integer> entry : observationCounts.entrySet()) {
-            int ruleId = entry.getKey();
-            nodes.put(ruleId, new RuleNode(
-                    ruleId,
-                    sourceSignatures.getOrDefault(ruleId, ""),
-                    targetSignatures.getOrDefault(ruleId, ""),
-                    entry.getValue()));
+    public RuleDependencyGraph build() {
+        Map<String, RuleNode> nodes = new HashMap<>(nodeMetadata);
+        // Update observation counts from accumulated state
+        for (Map.Entry<String, Integer> entry : observationCounts.entrySet()) {
+            RuleNode existing = nodes.get(entry.getKey());
+            if (existing != null) {
+                // rebuild with updated count
+                nodes.put(entry.getKey(), new RuleNode(
+                        existing.getNodeKey(),
+                        existing.getRuleId(),
+                        existing.getSourceTemplateSignature(),
+                        existing.getTargetTemplateSignature(),
+                        existing.getMatchedNodeSignature(),
+                        entry.getValue()));
+            }
         }
 
-        for (Map.Entry<Long, Integer> entry : edgeFireCounts.entrySet()) {
-            long key    = entry.getKey();
-            int  fromId = (int) (key >> 32);
-            int  toId   = (int) (key & 0xFFFFFFFFL);
-            int  count  = entry.getValue();
-            double totalBenefit = edgeTotalBenefits.getOrDefault(key, 0.0);
-            outEdges.computeIfAbsent(fromId, k -> new ArrayList<>())
-                    .add(new DependencyEdge(fromId, toId, count, totalBenefit));
+        Map<String, List<DependencyEdge>> outEdges = new HashMap<>();
+        for (Map.Entry<String, Integer> entry : edgeFireCounts.entrySet()) {
+            String edgeKey = entry.getKey();
+            int arrowIdx = edgeKey.indexOf("->");
+            String fromKey = edgeKey.substring(0, arrowIdx);
+            String toKey   = edgeKey.substring(arrowIdx + 2);
+            int count = entry.getValue();
+            double totalBenefit = edgeTotalBenefits.getOrDefault(edgeKey, 0.0);
+            outEdges.computeIfAbsent(fromKey, k -> new ArrayList<>())
+                    .add(new DependencyEdge(fromKey, toKey, count, totalBenefit));
         }
 
         return new RuleDependencyGraph(nodes, outEdges);
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────
 
-    private void enumerateChains(List<RuleApplicationStep> steps, int start,
-                                  List<RuleApplicationStep> current,
-                                  List<List<RuleApplicationStep>> result) {
-        for (int i = start; i < steps.size(); i++) {
-            current.add(steps.get(i));
-            result.add(new ArrayList<>(current));
-            enumerateChains(steps, i + 1, current, result);
-            current.remove(current.size() - 1);
-        }
+    /** Node key = "ruleId:matchedNodeSignature" */
+    private String nodeKeyOf(RuleApplicationStep step) {
+        AutoRewriteRule rule = (AutoRewriteRule) step.getRule();
+        String matchedSig = signatureOf(step.getMatchedRelNode());
+        return RuleNode.keyOf(rule.getRuleId(), matchedSig);
+    }
+
+    private RuleNode buildRuleNode(RuleApplicationStep step, String nodeKey) {
+        AutoRewriteRule rule = (AutoRewriteRule) step.getRule();
+        return new RuleNode(
+                nodeKey,
+                rule.getRuleId(),
+                signatureOf(rule.getSourceTemplate()),
+                signatureOf(rule.getTargetTemplate()),
+                signatureOf(step.getMatchedRelNode()),
+                0);
     }
 
     private String signatureOf(RelNode node) {
@@ -120,8 +159,5 @@ public class RuleGraphBuilder {
             appendSignature(child, sb);
         }
     }
-
-    private long edgeKey(int fromId, int toId) {
-        return ((long) fromId << 32) | (toId & 0xFFFFFFFFL);
-    }
 }
+

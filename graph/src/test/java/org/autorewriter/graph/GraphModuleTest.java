@@ -46,7 +46,6 @@ class GraphModuleTest {
         module1.flush();
         assertTrue(Files.exists(persistPath));
 
-        // Second load should not throw
         GraphModule module2 = GraphModule.load(persistPath, 1);
         assertNotNull(module2);
     }
@@ -56,7 +55,7 @@ class GraphModuleTest {
         Path persistPath = tempDir.resolve("graph.json");
         GraphModule module = GraphModule.load(persistPath, 1);
 
-        List<Integer> ranked = module.rankRules(List.of(0, 1, 2), -1);
+        List<String> ranked = module.rankRules(List.of("0:Filter", "1:Join", "2:Scan"), null);
         assertEquals(3, ranked.size());
     }
 

@@ -127,7 +127,7 @@ public class CostBaseOptimizer implements BaseOptimizer {
         }
 
         if (trace != null) {
-            planner.addListener(new RuleTraceListener(trace));
+            planner.addListener(new RuleTraceListener(trace, planner));
         }
 
         root.getCluster().setMetadataProvider(
