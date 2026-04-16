@@ -99,10 +99,10 @@ public class GraphVisualizer {
         sb.append("digraph RuleDependencyGraph {\n");
         sb.append("  rankdir=TB;\n");
         sb.append("  splines=curved;\n");
-        sb.append("  nodesep=0.5;\n");
-        sb.append("  ranksep=0.8;\n");
+        sb.append("  nodesep=0.3;\n");
+        sb.append("  ranksep=0.5;\n");
         sb.append("  graph [fontname=\"Helvetica\", fontsize=11];\n");
-        sb.append("  node  [shape=box, style=\"filled,rounded\", fontname=\"Helvetica\", fontsize=10, width=2.2, height=0.6, fixedsize=false];\n");
+        sb.append("  node  [shape=box, style=\"filled,rounded\", fontname=\"Helvetica-Bold\", fontsize=12, width=2.8, height=0.9, fixedsize=false];\n");
         sb.append("  edge  [fontname=\"Helvetica\", fontsize=8, arrowsize=0.6];\n\n");
 
         // emit rank=same groups (only groups with 2+ nodes)
