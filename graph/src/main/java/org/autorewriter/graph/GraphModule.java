@@ -7,6 +7,7 @@ import org.autorewriter.graph.io.GraphSerializer;
 import org.autorewriter.graph.io.GraphVisualizer;
 import org.autorewriter.graph.model.DependencyEdge;
 import org.autorewriter.graph.model.RuleDependencyGraph;
+import org.autorewriter.graph.model.RuleNode;
 import org.autorewriter.rewriter.optimize.trace.OptimizationTrace;
 import org.autorewriter.rewriter.optimize.trace.TraceConsumer;
 
@@ -142,15 +143,15 @@ public class GraphModule implements TraceConsumer {
      */
     public List<String> rankRules(List<String> candidateNodeKeys, String currentNodeKey) {
         RuleDependencyGraph graph = builder.build();
-        List<DependencyEdge> outEdges = currentNodeKey != null
-                ? graph.getOutEdges(currentNodeKey)
-                : Collections.emptyList();
 
+        // 用 JGraphT 计算从 currentNodeKey 到各候选节点的转移概率
         Map<String, Double> probMap = new HashMap<>();
-        int fromObs = currentNodeKey != null && graph.getNode(currentNodeKey) != null
-                ? graph.getNode(currentNodeKey).getObservationCount() : 0;
-        for (DependencyEdge e : outEdges) {
-            probMap.put(e.getToNodeKey(), e.getProbability(fromObs));
+        if (currentNodeKey != null && graph.jgrapht().containsVertex(currentNodeKey)) {
+            RuleNode fromNode = graph.getNode(currentNodeKey);
+            int fromObs = fromNode != null ? fromNode.getObservationCount() : 0;
+            for (DependencyEdge e : graph.getOutEdgesOf(currentNodeKey)) {
+                probMap.put(e.getToNodeKey(), e.getProbability(fromObs));
+            }
         }
 
         List<String> ranked = new ArrayList<>(candidateNodeKeys);

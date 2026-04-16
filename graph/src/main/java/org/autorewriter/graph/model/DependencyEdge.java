@@ -3,6 +3,7 @@ package org.autorewriter.graph.model;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
+import org.jgrapht.graph.DefaultEdge;
 
 /**
  * A directed edge in the rule dependency graph.
@@ -14,7 +15,7 @@ import lombok.Getter;
  * <p>Node keys have the form {@code "ruleId:matchedNodeSignature"}.
  */
 @Getter
-public class DependencyEdge {
+public class DependencyEdge extends DefaultEdge {
 
     private final String fromNodeKey;
     private final String toNodeKey;

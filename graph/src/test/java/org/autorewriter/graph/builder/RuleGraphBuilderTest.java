@@ -51,10 +51,10 @@ class RuleGraphBuilderTest {
 
         String nodeKeyA = RuleNode.keyOf(0, "LogicalFilter");
         String nodeKeyB = RuleNode.keyOf(1, "LogicalJoin");
-        assertEquals(1, graph.getOutEdges(nodeKeyA).size());
-        assertEquals(nodeKeyB, graph.getOutEdges(nodeKeyA).get(0).getToNodeKey());
+        assertEquals(1, graph.getOutEdgesOf(nodeKeyA).size());
+        assertEquals(nodeKeyB, graph.getOutEdgesOf(nodeKeyA).get(0).getToNodeKey());
         // No reverse edge
-        assertEquals(0, graph.getOutEdges(nodeKeyB).size());
+        assertEquals(0, graph.getOutEdgesOf(nodeKeyB).size());
     }
 
     /**
@@ -80,8 +80,8 @@ class RuleGraphBuilderTest {
         RuleDependencyGraph graph = builder.build();
         String nodeKeyA = RuleNode.keyOf(0, "LogicalFilter");
         assertEquals(2, graph.getNode(nodeKeyA).getObservationCount());
-        assertEquals(2, graph.getOutEdges(nodeKeyA).get(0).getFireCount());
-        assertEquals(1.0, graph.getOutEdges(nodeKeyA).get(0).getProbability(2), 1e-9);
+        assertEquals(2, graph.getOutEdgesOf(nodeKeyA).get(0).getFireCount());
+        assertEquals(1.0, graph.getOutEdgesOf(nodeKeyA).get(0).getProbability(2), 1e-9);
     }
 
     @Test

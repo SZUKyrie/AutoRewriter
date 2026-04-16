@@ -63,7 +63,7 @@ public class GraphVisualizer {
         while (!queue.isEmpty()) {
             String cur = queue.poll();
             int layer = bfsLayer.get(cur);
-            for (DependencyEdge edge : graph.getOutEdges(cur)) {
+            for (DependencyEdge edge : graph.getOutEdgesOf(cur)) {
                 String to = edge.getToNodeKey();
                 int next = layer + 1;
                 if (!bfsLayer.containsKey(to) || bfsLayer.get(to) < next) {
@@ -208,7 +208,7 @@ public class GraphVisualizer {
             String fromKey = chain.get(i);
             RuleNode fromNode = graph.getNode(fromKey);
             int fromObs = fromNode != null ? fromNode.getObservationCount() : 0;
-            for (DependencyEdge edge : graph.getOutEdges(fromKey)) {
+            for (DependencyEdge edge : graph.getOutEdgesOf(fromKey)) {
                 int fire = edge.getFireCount();
                 double prob = edge.getProbability(fromObs);
                 double penwidth = 0.8 + (double) fire / Math.max(1, maxFire) * 2.0;

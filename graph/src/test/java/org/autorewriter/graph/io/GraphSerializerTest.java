@@ -52,8 +52,8 @@ class GraphSerializerTest {
         String keyA = RuleNode.keyOf(0, "Filter-LeftJoin");
         assertEquals("Filter-LeftJoin", restored.getNode(keyA).getSourceTemplateSignature());
         assertEquals(10, restored.getNode(keyA).getObservationCount());
-        assertEquals(7, restored.getOutEdges(keyA).get(0).getFireCount());
-        assertEquals(8750.0 / 7, restored.getOutEdges(keyA).get(0).getAvgBenefit(), 1e-6);
+        assertEquals(7, restored.getOutEdgesOf(keyA).get(0).getFireCount());
+        assertEquals(8750.0 / 7, restored.getOutEdgesOf(keyA).get(0).getAvgBenefit(), 1e-6);
     }
 
     @Test
