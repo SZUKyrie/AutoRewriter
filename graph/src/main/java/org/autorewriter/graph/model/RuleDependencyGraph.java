@@ -2,9 +2,6 @@ package org.autorewriter.graph.model;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import org.jgrapht.Graph;
-import org.jgrapht.Graphs;
-import org.jgrapht.alg.shortestpath.BFSShortestPath;
 import org.jgrapht.graph.DefaultDirectedWeightedGraph;
 import org.jgrapht.graph.DefaultWeightedEdge;
 import org.jgrapht.traverse.BreadthFirstIterator;
@@ -31,8 +28,6 @@ public class RuleDependencyGraph {
 
     /** nodeKey → 出边列表（与 jg 保持同步，供旧接口使用） */
     private final Map<String, List<DependencyEdge>> outEdges;
-
-    // ── 构造 ──────────────────────────────────────────────────────────────
 
     @JsonCreator
     public RuleDependencyGraph(
