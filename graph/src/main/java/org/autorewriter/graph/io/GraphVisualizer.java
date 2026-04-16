@@ -9,8 +9,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.TreeMap;
 /**
  * Exports a {@link RuleDependencyGraph} as a Graphviz DOT graph and renders it to PNG.
  *
@@ -42,127 +46,248 @@ public class GraphVisualizer {
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("digraph RuleDependencyGraph {\n");
-        sb.append("  rankdir=TB;\n");
-        sb.append("  splines=polyline;\n");
-        sb.append("  nodesep=0.5;\n");
-        sb.append("  ranksep=1.2;\n");
-        sb.append("  graph [fontname=\"Helvetica\", fontsize=11];\n");
-        sb.append("  node  [shape=box, style=\"filled,rounded\", fontname=\"Helvetica\", fontsize=9, width=1.8, fixedsize=false];\n");
-        sb.append("  edge  [fontname=\"Helvetica\", fontsize=7, arrowsize=0.5];\n\n");
 
-        // --- compute in-degree ---
-        Map<String, Integer> inDegree = new java.util.HashMap<>();
-        for (RuleNode node : graph.getNodes().values()) {
-            inDegree.put(node.getNodeKey(), 0);
-        }
+        // --- compute BFS layer for each node (topological rank) ---
+        Map<String, Integer> inDegree = new HashMap<>();
+        for (String key : graph.getNodes().keySet()) inDegree.put(key, 0);
         for (List<DependencyEdge> edges : graph.getOutEdges().values()) {
             for (DependencyEdge e : edges) {
                 inDegree.merge(e.getToNodeKey(), 1, Integer::sum);
             }
         }
+        Map<String, Integer> bfsLayer = new HashMap<>();
+        Queue<String> queue = new ArrayDeque<>();
+        for (Map.Entry<String, Integer> e : inDegree.entrySet()) {
+            if (e.getValue() == 0) { queue.add(e.getKey()); bfsLayer.put(e.getKey(), 0); }
+        }
+        while (!queue.isEmpty()) {
+            String cur = queue.poll();
+            int layer = bfsLayer.get(cur);
+            for (DependencyEdge edge : graph.getOutEdges(cur)) {
+                String to = edge.getToNodeKey();
+                int next = layer + 1;
+                if (!bfsLayer.containsKey(to) || bfsLayer.get(to) < next) {
+                    bfsLayer.put(to, next);
+                    queue.add(to);
+                }
+            }
+        }
+        for (String key : graph.getNodes().keySet()) {
+            bfsLayer.putIfAbsent(key, 0);
+        }
 
-        // --- max fire count for edge scaling ---
-        int maxFire = graph.getOutEdges().values().stream()
-                .flatMap(List::stream)
-                .mapToInt(DependencyEdge::getFireCount)
-                .max().orElse(1);
+        // --- group nodes by BFS layer ---
+        TreeMap<Integer, List<RuleNode>> byLayer = new TreeMap<>();
+        for (RuleNode node : graph.getNodes().values()) {
+            int r = bfsLayer.getOrDefault(node.getNodeKey(), 0);
+            byLayer.computeIfAbsent(r, k -> new java.util.ArrayList<>()).add(node);
+        }
+
+        // --- decide layout mode ---
+        // If the graph is essentially a linear chain (max branch ≤ 1 at every node),
+        // fold it into rows of FOLD_WIDTH so it doesn't stretch into one long line.
+        final int FOLD_WIDTH = 5;   // nodes per "row" before wrapping
+        boolean isChain = graph.getOutEdges().values().stream()
+                .noneMatch(edges -> edges.size() > 1)
+                && byLayer.values().stream().allMatch(g -> g.size() == 1);
+
+        if (isChain) {
+            return generateFoldedChainDot(graph, bfsLayer, byLayer, FOLD_WIDTH, sb);
+        }
+
+        // --- normal tree/dag layout ---
+        sb.append("digraph RuleDependencyGraph {\n");
+        sb.append("  rankdir=TB;\n");
+        sb.append("  splines=curved;\n");
+        sb.append("  nodesep=0.5;\n");
+        sb.append("  ranksep=0.8;\n");
+        sb.append("  graph [fontname=\"Helvetica\", fontsize=11];\n");
+        sb.append("  node  [shape=box, style=\"filled,rounded\", fontname=\"Helvetica\", fontsize=10, width=2.2, height=0.6, fixedsize=false];\n");
+        sb.append("  edge  [fontname=\"Helvetica\", fontsize=8, arrowsize=0.6];\n\n");
+
+        // emit rank=same groups (only groups with 2+ nodes)
+        for (Map.Entry<Integer, List<RuleNode>> entry : byLayer.entrySet()) {
+            List<RuleNode> group = entry.getValue();
+            if (group.size() < 2) continue;
+            sb.append("  { rank=same;");
+            for (RuleNode node : group) {
+                sb.append(" ").append(sanitizeDotId(node.getNodeKey())).append(";");
+            }
+            sb.append(" }\n");
+        }
+        sb.append("\n");
+
+        appendNodesAndEdges(graph, bfsLayer, sb);
+
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    /**
+     * Lay out a linear chain in a snake/grid pattern so it doesn't become
+     * one extremely long line.  Nodes are arranged in rows of {@code foldWidth}
+     * using invisible "anchor" nodes to force row breaks.
+     */
+    private static String generateFoldedChainDot(
+            RuleDependencyGraph graph,
+            Map<String, Integer> bfsLayer,
+            TreeMap<Integer, List<RuleNode>> byLayer,
+            int foldWidth,
+            StringBuilder sb) {
+
+        // Build the ordered chain (sorted by BFS layer)
+        java.util.List<String> chain = new java.util.ArrayList<>();
+        for (List<RuleNode> group : byLayer.values()) {
+            for (RuleNode n : group) chain.add(n.getNodeKey());
+        }
+
+        sb.append("digraph RuleDependencyGraph {\n");
+        sb.append("  rankdir=LR;\n");
+        sb.append("  splines=ortho;\n");
+        sb.append("  nodesep=0.4;\n");
+        sb.append("  ranksep=0.8;\n");
+        sb.append("  graph [fontname=\"Helvetica\", fontsize=11];\n");
+        sb.append("  node  [shape=box, style=\"filled,rounded\", fontname=\"Helvetica\", fontsize=10, width=2.2, height=0.6, fixedsize=false];\n");
+        sb.append("  edge  [fontname=\"Helvetica\", fontsize=8, arrowsize=0.6];\n\n");
+
+        int totalNodes = chain.size();
+        int numRows = (totalNodes + foldWidth - 1) / foldWidth;
+
+        // Assign a "column" rank to each node so rank=same groups them into rows
+        // Row 0: nodes 0..foldWidth-1  (columns 0..foldWidth-1)
+        // Row 1: nodes foldWidth..2*foldWidth-1  (same columns, reversed direction for snake)
+        // etc.
+        // We achieve the grid by assigning each node a virtual column:
+        //   odd rows run right-to-left  (column = foldWidth-1 - pos_in_row)
+        //   even rows run left-to-right (column = pos_in_row)
+        Map<String, Integer> colOf = new HashMap<>();
+        for (int i = 0; i < totalNodes; i++) {
+            int row = i / foldWidth;
+            int posInRow = i % foldWidth;
+            int col = (row % 2 == 0) ? posInRow : (foldWidth - 1 - posInRow);
+            colOf.put(chain.get(i), col);
+        }
+
+        // emit rank=same for each column (to force vertical alignment)
+        TreeMap<Integer, List<String>> byCol = new TreeMap<>();
+        for (Map.Entry<String, Integer> e : colOf.entrySet()) {
+            byCol.computeIfAbsent(e.getValue(), k -> new java.util.ArrayList<>()).add(e.getKey());
+        }
+        for (Map.Entry<Integer, List<String>> entry : byCol.entrySet()) {
+            List<String> group = entry.getValue();
+            if (group.size() < 2) continue;
+            sb.append("  { rank=same;");
+            for (String key : group) sb.append(" ").append(sanitizeDotId(key)).append(";");
+            sb.append(" }\n");
+        }
+        sb.append("\n");
 
         // --- max observation count for color scaling ---
         int maxObs = graph.getNodes().values().stream()
-                .mapToInt(RuleNode::getObservationCount)
-                .max().orElse(1);
+                .mapToInt(RuleNode::getObservationCount).max().orElse(1);
+        int maxFire = graph.getOutEdges().values().stream()
+                .flatMap(List::stream)
+                .mapToInt(DependencyEdge::getFireCount).max().orElse(1);
 
-        // --- roots rank ---
-        List<String> roots = graph.getNodes().keySet().stream()
-                .filter(k -> inDegree.getOrDefault(k, 0) == 0)
-                .collect(java.util.stream.Collectors.toList());
-        if (!roots.isEmpty()) {
-            sb.append("  { rank=source; ");
-            for (String k : roots) sb.append(sanitizeDotId(k)).append("; ");
-            sb.append("}\n\n");
-        }
-
-        // --- cluster by matched node type ---
-        Map<String, List<RuleNode>> byType = new java.util.LinkedHashMap<>();
-        for (RuleNode node : graph.getNodes().values()) {
-            String sig  = node.getMatchedNodeSignature();
-            String type = sig.contains("-") ? sig.substring(0, sig.indexOf('-')) : sig;
-            byType.computeIfAbsent(type, k -> new java.util.ArrayList<>()).add(node);
-        }
-
-        int clusterIdx = 0;
-        for (Map.Entry<String, List<RuleNode>> entry : byType.entrySet()) {
-            List<RuleNode> clusterNodes = entry.getValue();
-            if (clusterNodes.size() > 1) {
-                sb.append(String.format("  subgraph cluster_%d {\n", clusterIdx++));
-                sb.append(String.format("    label=\"%s\";\n", escape(entry.getKey())));
-                sb.append("    style=dashed; color=\"#BBBBBB\"; bgcolor=\"#F8F8F8\";\n");
-                for (RuleNode node : clusterNodes) {
-                    sb.append("    ").append(sanitizeDotId(node.getNodeKey())).append(";\n");
-                }
-                sb.append("  }\n");
-            }
-        }
-        sb.append("\n");
-
-        // --- emit nodes ---
+        // emit nodes
         for (RuleNode node : graph.getNodes().values()) {
             String dotId = sanitizeDotId(node.getNodeKey());
-            String matchedType = node.getMatchedNodeSignature();
-            if (matchedType.contains("-")) matchedType = matchedType.substring(0, matchedType.indexOf('-'));
-            // Remove "Logical" prefix for brevity
-            matchedType = matchedType.replace("Logical", "");
-
+            String sig = node.getMatchedNodeSignature();
+            if (sig.contains("-")) sig = sig.substring(0, sig.indexOf('-'));
+            sig = sig.replace("Logical", "");
             String label = String.format("r%d / %s\\n×%d",
-                    node.getRuleId(), escape(matchedType), node.getObservationCount());
-
-            double ratio     = maxObs == 0 ? 0.0 : (double) node.getObservationCount() / maxObs;
-            String fillColor = interpolateColor(ratio);
-            boolean isRoot   = inDegree.getOrDefault(node.getNodeKey(), 0) == 0;
-            String border    = isRoot ? ", penwidth=2.5, color=\"#444444\"" : ", penwidth=0.8, color=\"#BBBBBB\"";
-
-            sb.append(String.format("  %s [label=\"%s\", fillcolor=\"%s\"%s];\n",
-                    dotId, label, fillColor, border));
+                    node.getRuleId(), escape(sig), node.getObservationCount());
+            double ratio = maxObs == 0 ? 0.0 : (double) node.getObservationCount() / maxObs;
+            sb.append(String.format("  %s [label=\"%s\", fillcolor=\"%s\"];\n",
+                    dotId, label, interpolateColor(ratio)));
         }
         sb.append("\n");
 
-        // --- emit only high-weight edges to reduce clutter ---
-        // Show edges where fireCount >= threshold (top ~30% of edges)
-        int[] allFires = graph.getOutEdges().values().stream()
-                .flatMap(List::stream)
-                .mapToInt(DependencyEdge::getFireCount)
-                .sorted().toArray();
-        int threshold = allFires.length > 0
-                ? allFires[Math.max(0, (int)(allFires.length * 0.5))]  // top 50%
-                : 1;
-
-        for (Map.Entry<String, List<DependencyEdge>> entry : graph.getOutEdges().entrySet()) {
-            String fromKey  = entry.getKey();
+        // emit edges (all chain edges are forward, so no backward handling needed)
+        for (int i = 0; i < chain.size(); i++) {
+            String fromKey = chain.get(i);
             RuleNode fromNode = graph.getNode(fromKey);
             int fromObs = fromNode != null ? fromNode.getObservationCount() : 0;
-
-            for (DependencyEdge edge : entry.getValue()) {
-                if (edge.getFireCount() < threshold) continue;  // skip low-weight edges
-
-                double prob    = edge.getProbability(fromObs);
-                int    fire    = edge.getFireCount();
-                double penwidth = 0.8 + (double)(fire - threshold) / Math.max(1, maxFire - threshold) * 2.5;
-                String color   = prob >= 0.7 ? "#CC2222"
-                               : prob >= 0.4 ? "#888888"
-                               :               "#BBBBBB";
+            for (DependencyEdge edge : graph.getOutEdges(fromKey)) {
+                int fire = edge.getFireCount();
+                double prob = edge.getProbability(fromObs);
+                double penwidth = 0.8 + (double) fire / Math.max(1, maxFire) * 2.0;
+                String color = prob >= 0.7 ? "#CC2222" : prob >= 0.4 ? "#888888" : "#BBBBBB";
                 String lbl = fire > 1 ? String.format("×%d", fire) : "";
 
+                // "row break" edges (connecting end of one row to start of next)
+                // need constraint=false so they don't force extra horizontal span
+                String toKey = edge.getToNodeKey();
+                int fromIdx = chain.indexOf(fromKey);
+                int toIdx   = chain.indexOf(toKey);
+                int fromRow = fromIdx / foldWidth;
+                int toRow   = toIdx / foldWidth;
+                String extra = (fromRow != toRow) ? ", constraint=false" : "";
+
                 sb.append(String.format(
-                        "  %s -> %s [label=\"%s\", penwidth=%.1f, color=\"%s\", fontcolor=\"%s\"];\n",
-                        sanitizeDotId(edge.getFromNodeKey()),
-                        sanitizeDotId(edge.getToNodeKey()),
-                        lbl, penwidth, color, color));
+                        "  %s -> %s [label=\"%s\", penwidth=%.1f, color=\"%s\", fontcolor=\"%s\"%s];\n",
+                        sanitizeDotId(fromKey), sanitizeDotId(toKey),
+                        lbl, penwidth, color, color, extra));
             }
         }
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /** Append node and edge declarations for normal (non-chain) graphs. */
+    private static void appendNodesAndEdges(
+            RuleDependencyGraph graph,
+            Map<String, Integer> bfsLayer,
+            StringBuilder sb) {
+
+        int maxObs = graph.getNodes().values().stream()
+                .mapToInt(RuleNode::getObservationCount).max().orElse(1);
+        int maxFire = graph.getOutEdges().values().stream()
+                .flatMap(List::stream)
+                .mapToInt(DependencyEdge::getFireCount).max().orElse(1);
+
+        int[] allFires = graph.getOutEdges().values().stream()
+                .flatMap(List::stream)
+                .mapToInt(DependencyEdge::getFireCount)
+                .sorted().toArray();
+        int threshold = allFires.length > 0
+                ? allFires[Math.max(0, (int) (allFires.length * 0.5))] : 1;
+
+        for (RuleNode node : graph.getNodes().values()) {
+            String dotId = sanitizeDotId(node.getNodeKey());
+            String sig = node.getMatchedNodeSignature();
+            if (sig.contains("-")) sig = sig.substring(0, sig.indexOf('-'));
+            sig = sig.replace("Logical", "");
+            String label = String.format("r%d / %s\\n×%d",
+                    node.getRuleId(), escape(sig), node.getObservationCount());
+            double ratio = maxObs == 0 ? 0.0 : (double) node.getObservationCount() / maxObs;
+            sb.append(String.format("  %s [label=\"%s\", fillcolor=\"%s\"];\n",
+                    dotId, label, interpolateColor(ratio)));
+        }
+        sb.append("\n");
+
+        for (Map.Entry<String, List<DependencyEdge>> entry : graph.getOutEdges().entrySet()) {
+            String fromKey = entry.getKey();
+            RuleNode fromNode = graph.getNode(fromKey);
+            int fromObs   = fromNode != null ? fromNode.getObservationCount() : 0;
+            int fromLayer = bfsLayer.getOrDefault(fromKey, 0);
+            for (DependencyEdge edge : entry.getValue()) {
+                if (edge.getFireCount() < threshold) continue;
+                int toLayer = bfsLayer.getOrDefault(edge.getToNodeKey(), 0);
+                double prob     = edge.getProbability(fromObs);
+                int    fire     = edge.getFireCount();
+                double penwidth = 0.8 + (double)(fire - threshold) / Math.max(1, maxFire - threshold) * 2.5;
+                String color    = prob >= 0.7 ? "#CC2222" : prob >= 0.4 ? "#888888" : "#BBBBBB";
+                String lbl      = fire > 1 ? String.format("×%d", fire) : "";
+                boolean backward = fromLayer >= toLayer;
+                String extra = backward ? ", constraint=false, style=dashed" : "";
+                sb.append(String.format(
+                        "  %s -> %s [label=\"%s\", penwidth=%.1f, color=\"%s\", fontcolor=\"%s\"%s];\n",
+                        sanitizeDotId(fromKey), sanitizeDotId(edge.getToNodeKey()),
+                        lbl, penwidth, color, color, extra));
+            }
+        }
     }
 
     /**

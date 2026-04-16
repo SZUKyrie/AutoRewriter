@@ -7,26 +7,24 @@ import lombok.Getter;
 /**
  * A node in the rule dependency graph.
  *
- * <p>A node represents one specific firing of an AutoRewriteRule at a particular
- * query sub-plan position. The same rule fired at different positions in the plan
- * tree produces distinct nodes, distinguished by {@code matchedNodeSignature}.
- *
  * <p>Node key: {@code ruleId + ":" + matchedNodeSignature}
  */
 @Getter
 public class RuleNode {
 
-    /** Unique string key: "ruleId:matchedNodeSignature" */
     private final String nodeKey;
-
     private final int    ruleId;
     private final String sourceTemplateSignature;
     private final String targetTemplateSignature;
-
-    /** Structural signature of the matched query sub-plan node (distinguishes firing positions). */
     private final String matchedNodeSignature;
 
-    private       int    observationCount;
+    /**
+     * Minimum trace position (0-indexed) at which this node was first observed.
+     * Used for rank=same tree layout. -1 = unknown.
+     */
+    private int rank;
+
+    private int observationCount;
 
     @JsonCreator
     public RuleNode(
@@ -42,13 +40,20 @@ public class RuleNode {
         this.targetTemplateSignature = targetTemplateSignature;
         this.matchedNodeSignature    = matchedNodeSignature;
         this.observationCount        = observationCount;
+        this.rank                    = -1;
     }
 
-    public void incrementObservation() {
-        this.observationCount++;
+    public void incrementObservation() { this.observationCount++; }
+
+    /** Update rank to the minimum observed position. */
+    public void updateRank(int position) {
+        if (this.rank < 0 || position < this.rank) {
+            this.rank = position;
+        }
     }
 
-    /** Build the node key from ruleId and matchedNodeSignature. */
+    public void setRank(int rank) { this.rank = rank; }
+
     public static String keyOf(int ruleId, String matchedNodeSignature) {
         return ruleId + ":" + matchedNodeSignature;
     }

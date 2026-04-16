@@ -48,11 +48,19 @@ public class RuleGraphBuilder {
         }
         if (autoSteps.isEmpty()) return;
 
-        // Update node observation counts for every step
-        for (RuleApplicationStep step : autoSteps) {
+        // Update node observation counts and rank for every step
+        for (int i = 0; i < autoSteps.size(); i++) {
+            RuleApplicationStep step = autoSteps.get(i);
             String nodeKey = nodeKeyOf(step);
             observationCounts.merge(nodeKey, 1, Integer::sum);
-            nodeMetadata.putIfAbsent(nodeKey, buildRuleNode(step, nodeKey));
+            if (!nodeMetadata.containsKey(nodeKey)) {
+                nodeMetadata.put(nodeKey, buildRuleNode(step, nodeKey));
+            }
+            // Update rank: use minimum position across all traces
+            int currentRank = nodeMetadata.get(nodeKey).getRank();
+            if (currentRank < 0 || i < currentRank) {
+                nodeMetadata.get(nodeKey).setRank(i);
+            }
         }
 
         // VolcanoPlanner applies rules in parallel (no strict causal chain).
@@ -75,7 +83,8 @@ public class RuleGraphBuilder {
             }
         }
 
-        // For every ordered pair (i < j), add a directed edge i → j only
+        // For every ordered pair (i < j), add a directed edge i → j only.
+        // This preserves all co-occurrence relationships between rules.
         for (int i = 0; i < distinctKeys.size(); i++) {
             for (int j = i + 1; j < distinctKeys.size(); j++) {
                 String fromKey = distinctKeys.get(i);
@@ -99,14 +108,15 @@ public class RuleGraphBuilder {
         for (Map.Entry<String, Integer> entry : observationCounts.entrySet()) {
             RuleNode existing = nodes.get(entry.getKey());
             if (existing != null) {
-                // rebuild with updated count
-                nodes.put(entry.getKey(), new RuleNode(
+                RuleNode updated = new RuleNode(
                         existing.getNodeKey(),
                         existing.getRuleId(),
                         existing.getSourceTemplateSignature(),
                         existing.getTargetTemplateSignature(),
                         existing.getMatchedNodeSignature(),
-                        entry.getValue()));
+                        entry.getValue());
+                updated.setRank(existing.getRank());  // preserve rank
+                nodes.put(entry.getKey(), updated);
             }
         }
 
