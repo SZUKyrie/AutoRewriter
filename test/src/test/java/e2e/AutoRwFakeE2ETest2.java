@@ -2,6 +2,8 @@ package e2e;
 
 import org.autorewriter.e2e.RewritePathE2ETest;
 import org.autorewriter.graph.GraphModule;
+import org.autorewriter.graph.model.GraphSummary;
+import org.autorewriter.graph.model.RuleDependencyGraph;
 import org.autorewriter.rewriter.pipleline.costbase.CostBaseProducePipeline;
 import org.junit.Test;
 
@@ -38,10 +40,13 @@ public class AutoRwFakeE2ETest2 extends RewritePathE2ETest {
         graphModule.visualizeDot(outputDir.resolve("rule-dependency-graph.dot"));
         graphModule.visualize(outputDir.resolve("rule-dependency-graph.png"));
 
+        RuleDependencyGraph graph = graphModule.buildGraph();
         System.out.printf("[Graph] %d nodes, %d edges → %s%n",
-                graphModule.buildGraph().nodeCount(),
-                graphModule.buildGraph().edgeCount(),
+                graph.nodeCount(), graph.edgeCount(),
                 outputDir.toAbsolutePath());
+
+        String summary = new GraphSummary(graph).report(30);
+        System.out.println(summary);
     }
 
     @Test
@@ -49,3 +54,4 @@ public class AutoRwFakeE2ETest2 extends RewritePathE2ETest {
         executePipeline(PipelineType.MANUAL, "diaspora", RULE_DIR);
     }
 }
+

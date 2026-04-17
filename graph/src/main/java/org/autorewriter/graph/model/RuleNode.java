@@ -3,6 +3,7 @@ package org.autorewriter.graph.model;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
+import lombok.Setter;
 import org.jgrapht.graph.DefaultEdge;
 
 /**
@@ -11,6 +12,7 @@ import org.jgrapht.graph.DefaultEdge;
  * <p>Node key: {@code ruleId + ":" + matchedNodeSignature}
  */
 @Getter
+@Setter
 public class RuleNode extends DefaultEdge {
 
     private final String nodeKey;
@@ -52,8 +54,6 @@ public class RuleNode extends DefaultEdge {
             this.rank = position;
         }
     }
-
-    public void setRank(int rank) { this.rank = rank; }
 
     public static String keyOf(int ruleId, String matchedNodeSignature) {
         return ruleId + ":" + matchedNodeSignature;
