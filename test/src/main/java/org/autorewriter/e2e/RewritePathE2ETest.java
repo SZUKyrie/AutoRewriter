@@ -167,6 +167,83 @@ RewritePathE2ETest extends AutoRwFakeE2ETesBase {
         printSummaryTable("Manual/RBO", results);
     }
 
+    /**
+     * Parameterized version of testRewritePathsManual for reuse by subclasses.
+     *
+     * @param excelAbsPath absolute path to the Excel file containing expected paths
+     * @param sql          the SQL query to rewrite
+     * @param ddlDirname   schema directory name under E2E_TEST_TABLE_DDL (e.g. "diaspora")
+     */
+    protected void runManualPathTest(String excelAbsPath, String sql, String ddlDirname) {
+        List<ExpectedPath> paths = readExpectedPaths(excelAbsPath);
+        List<PathResult> results = new ArrayList<>();
+
+        int passCount = 0;
+        for (ExpectedPath expected : paths) {
+            log.info("===== Testing {} (Manual/RBO): {} steps, rules {} =====",
+                    expected.sheetName, expected.stepCount(), expected.ruleIds);
+
+            PathResult pr = new PathResult(expected);
+            try {
+                List<String> distinctTemplates = expected.distinctTemplates().stream()
+                        .map(RewritePathE2ETest::replaceKPlaceholders)
+                        .collect(Collectors.toList());
+                Map<String, String> templateToRuleId = new HashMap<>();
+                List<String> originalTemplates = expected.distinctTemplates();
+                for (int j = 0; j < distinctTemplates.size(); j++) {
+                    if (j < expected.ruleIds.size())
+                        templateToRuleId.put(distinctTemplates.get(j), expected.ruleIds.get(j));
+                }
+
+                // Run via ManualProducePipeline — same path as production code
+                ProduceResult result = executePipeline(PipelineType.MANUAL, ddlDirname, distinctTemplates, sql);
+                OptimizationTrace trace = result.getOptimizeResults().isEmpty()
+                        ? null : result.getOptimizeResults().get(0).getTrace();
+
+                if (trace == null) {
+                    pr.matchType = "NO_TRACE";
+                    results.add(pr);
+                    continue;
+                }
+
+                // Build rule-name → template mapping from the registered rules
+                List<RuleAnalysisContext> ruleContexts = parseTemplates(distinctTemplates);
+                Map<String, String> ruleNameToTemplate = buildRuleNameMapping(ruleContexts, distinctTemplates);
+
+                List<String> actualTemplateSequence = extractAutoRewriteTemplateSequence(trace, ruleNameToTemplate);
+                pr.actualRuleIds = actualTemplateSequence.stream()
+                        .map(t -> templateToRuleId.getOrDefault(t, "?"))
+                        .collect(Collectors.toList());
+                pr.actualDistinct = (int) new HashSet<>(actualTemplateSequence).size();
+
+                boolean sequenceMatch = expected.ruleTemplates.equals(actualTemplateSequence);
+                Set<String> expectedDistinctSet = new HashSet<>(expected.ruleTemplates);
+                Set<String> actualDistinctSet = new HashSet<>(actualTemplateSequence);
+                boolean distinctSetMatch = expectedDistinctSet.equals(actualDistinctSet);
+                boolean actualIsSubset = expectedDistinctSet.containsAll(actualDistinctSet) && !actualDistinctSet.isEmpty();
+
+                if (sequenceMatch) {
+                    pr.matchType = "EXACT";
+                    passCount++;
+                } else if (distinctSetMatch) {
+                    pr.matchType = "DISTINCT_EQ";
+                    passCount++;
+                } else if (actualIsSubset) {
+                    pr.matchType = "SUBSET(" + pr.actualDistinct + "/" + pr.expectedDistinct + ")";
+                    passCount++;
+                } else {
+                    pr.matchType = "MISMATCH";
+                }
+            } catch (Exception e) {
+                pr.matchType = "ERROR";
+                log.error("{} ERROR: {}", expected.sheetName, e.getMessage(), e);
+            }
+            results.add(pr);
+        }
+        log.info("===== Manual/RBO [{}]: {}/{} paths verified =====", ddlDirname, passCount, paths.size());
+        printSummaryTable("Manual/RBO [" + ddlDirname + "]", results);
+    }
+
     @Test
     public void testRewritePathsCbo() {
         List<ExpectedPath> paths = readExpectedPaths();
@@ -238,7 +315,11 @@ RewritePathE2ETest extends AutoRwFakeE2ETesBase {
     // ── Path reading ─────────────────────────────────────────────────────
 
     private List<ExpectedPath> readExpectedPaths() {
-        String excelPath = RESOURCES_ROOT + PATHS_EXCEL;
+        return readExpectedPaths(RESOURCES_ROOT + PATHS_EXCEL);
+    }
+
+    protected List<ExpectedPath> readExpectedPaths(String excelAbsPath) {
+        String excelPath = excelAbsPath;
         List<ExpectedPath> paths = new ArrayList<>();
 
         try (FileInputStream fis = new FileInputStream(excelPath);

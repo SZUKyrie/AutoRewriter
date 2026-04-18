@@ -146,6 +146,41 @@ public class AutoRwFakeE2ETesBase extends PostgresqlSchemaTestBase {
         return pipeline.run(context);
     }
 
+    /**
+     * Execute MANUAL pipeline with explicit rule strings and a single SQL string.
+     * Used by WeTune E2E tests where each query is tested individually.
+     */
+    protected ProduceResult executePipeline(PipelineType pipelineType, String ddlDirname,
+                                             List<String> rules, String sql) {
+        String customDdlFilePath = E2E_TEST_TABLE_DDL + ddlDirname + "/" + CUSTOM_TABLE_DDL;
+        Path path = Paths.get(customDdlFilePath);
+        if (Files.exists(path)) {
+            createAllTable(customDdlFilePath);
+        }
+
+        List<RuleAnalysisContext> ruleContexts = new ArrayList<>();
+        for (String rule : rules) {
+            try {
+                RuleAnalysisContext ctx = RuleAnalyzer.analyze(rule);
+                if (ctx != null && ctx.getSourceRelNode() != null && ctx.getTargetRelNode() != null) {
+                    ruleContexts.add(ctx);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to parse rule: {}", rule.substring(0, Math.min(80, rule.length())), e);
+            }
+        }
+
+        Map<String, HistoricalSqlRecord> queries = new LinkedHashMap<>();
+        HistoricalSqlRecord record = new HistoricalSqlRecord();
+        record.setQueryId("q0");
+        record.setSql(sql);
+        queries.put("q0", record);
+
+        ProduceContext context = new ProduceContext(queries, ruleContexts, ComputeEngine.POSTGRESQL);
+        ProducePipeline pipeline = createPipeline(pipelineType);
+        return pipeline.run(context);
+    }
+
     public ProduceContext createContextPublic(String ddlDirname, String ruleDirname) {
         return createContext(ddlDirname, ruleDirname);
     }

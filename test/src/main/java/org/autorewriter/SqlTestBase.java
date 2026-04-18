@@ -27,6 +27,10 @@ public class SqlTestBase {
     private static void createTablesFromMap(Map<String, List<String>> dbToDdlMap) {
         for (Map.Entry<String, List<String>> entry : dbToDdlMap.entrySet()) {
             String dbName = entry.getKey();
+            if (dbName == null) {
+                log.warn("Skipping {} DDL statements with no schema prefix", entry.getValue().size());
+                continue;
+            }
             List<String> createTableSqls = entry.getValue();
             SqlPlanFixture sqlPlanFixture = SqlTestBase.sqlPlanFixture.withDb(dbName).withComputeEngine(ComputeEngine.POSTGRESQL);
             sqlPlanFixture = sqlPlanFixture.withMultipleCreateTables(createTableSqls);
