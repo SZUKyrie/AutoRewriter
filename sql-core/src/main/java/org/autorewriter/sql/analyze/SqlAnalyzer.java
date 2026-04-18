@@ -66,7 +66,6 @@ public class SqlAnalyzer {
                 .context(plannerContext)
                 .typeSystem(relDataTypeSystem)
                 .convertletTable(COMMON_SQL_REX_CONVERTLET_TABLE)
-                //.operatorTable(HIVE_SQL_OPERATOR_TABLE)
                 .defaultSchema(rootSchema.plus()).build();
         return new MultiDialectPlanner(config, computeEngine);
     }
