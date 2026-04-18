@@ -3,6 +3,9 @@ package org.autorewriter.e2e;
 import lombok.extern.slf4j.Slf4j;
 import org.autorewriter.SqlTestBase;
 import org.autorewriter.common.enums.ComputeEngine;
+import org.autorewriter.graph.GraphModule;
+import org.autorewriter.graph.model.GraphSummary;
+import org.autorewriter.graph.model.RuleDependencyGraph;
 import org.autorewriter.rewriter.analyze.RuleAnalysisContext;
 import org.autorewriter.rewriter.analyze.RuleAnalyzer;
 import org.autorewriter.rewriter.historical.HistoricalSqlRecord;
@@ -184,9 +187,12 @@ public class AutoRwFakeE2ETesBase extends PostgresqlSchemaTestBase {
                     .collect(Collectors.toList());
 
             for (Path ruleFile : ruleFiles) {
-                try (BufferedReader reader = new BufferedReader(new FileReader(ruleFile.toFile()))) {
+                try (BufferedReader reader = new BufferedReader(
+                        new java.io.InputStreamReader(Files.newInputStream(ruleFile), java.nio.charset.StandardCharsets.UTF_8))) {
                     String line;
+                    int lineNumber = 0;
                     while ((line = reader.readLine()) != null) {
+                        lineNumber++;
                         line = line.trim();
                         if (line.isEmpty() || line.startsWith("#")) {
                             continue;
@@ -194,10 +200,17 @@ public class AutoRwFakeE2ETesBase extends PostgresqlSchemaTestBase {
                         try {
                             RuleAnalysisContext ctx = RuleAnalyzer.analyze(line);
                             if (ctx != null && ctx.getSourceRelNode() != null && ctx.getTargetRelNode() != null) {
-                                contexts.add(ctx);
+                                RuleAnalysisContext ctxWithLine = new RuleAnalysisContext(
+                                        ctx.getSourceRelNode(),
+                                        ctx.getTargetRelNode(),
+                                        ctx.getMatchConstraints(),
+                                        ctx.getRewriteConstraints(),
+                                        lineNumber
+                                );
+                                contexts.add(ctxWithLine);
                             }
                         } catch (Exception e) {
-                            // skip unparseable rules, consistent with testRuleParsingSuccessRate
+                            log.warn("Failed to parse rule at {}:{} — {}", ruleFile.getFileName(), lineNumber, e.getMessage());
                         }
                     }
                 }
@@ -252,6 +265,35 @@ public class AutoRwFakeE2ETesBase extends PostgresqlSchemaTestBase {
         MANUAL,
         CBO,
         HYBRID
+    }
+
+    public RuleDependencyGraph runWithGraph(Path outputDir, String dbName, String ruleDir, PipelineType pipelineType) {
+        String prefix = pipelineType.name().toLowerCase() + "-";
+
+        GraphModule graphModule = GraphModule.load(
+                outputDir.resolve(prefix + "rule-dependency-graph.json"), 0);
+
+        ProduceContext context = createContextPublic(dbName, ruleDir);
+
+        if (pipelineType == PipelineType.CBO) {
+            new CostBaseProducePipeline()
+                    .withTraceConsumer(graphModule)
+                    .run(context);
+        } else {
+            new ManualProducePipeline().run(context);
+        }
+
+        graphModule.export(outputDir.resolve(prefix + "gnn-input"));
+        graphModule.visualizeDot(outputDir.resolve(prefix + "rule-dependency-graph.dot"));
+        graphModule.visualize(outputDir.resolve(prefix + "rule-dependency-graph.png"));
+
+        RuleDependencyGraph graph = graphModule.buildGraph();
+        System.out.printf("[Graph/%s] %d nodes, %d edges → %s%n",
+                pipelineType.name(), graph.nodeCount(), graph.edgeCount(),
+                outputDir.toAbsolutePath());
+
+        System.out.println(new GraphSummary(graph).report(30));
+        return graph;
     }
 
     private Path resolveScenarioDir(String dirName) {

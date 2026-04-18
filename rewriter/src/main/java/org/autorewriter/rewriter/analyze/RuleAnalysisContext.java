@@ -38,6 +38,12 @@ public class RuleAnalysisContext {
      */
     private final List<ASTNode> rewriteConstraints;
 
+    /**
+     * The line number of this rule in the rule file (1-based).
+     * A value of -1 indicates that the line number is unknown.
+     */
+    private final int ruleLineNumber;
+
     public RuleAnalysisContext(
             RelNode sourceRelNode,
             RelNode targetRelNode,
@@ -49,6 +55,22 @@ public class RuleAnalysisContext {
             new ArrayList<>(matchConstraints) : Collections.emptyList();
         this.rewriteConstraints = rewriteConstraints != null ?
             new ArrayList<>(rewriteConstraints) : Collections.emptyList();
+        this.ruleLineNumber = -1;
+    }
+
+    public RuleAnalysisContext(
+            RelNode sourceRelNode,
+            RelNode targetRelNode,
+            Collection<? extends ASTNode> matchConstraints,
+            Collection<? extends ASTNode> rewriteConstraints,
+            int ruleLineNumber) {
+        this.sourceRelNode = sourceRelNode;
+        this.targetRelNode = targetRelNode;
+        this.matchConstraints = matchConstraints != null ?
+            new ArrayList<>(matchConstraints) : Collections.emptyList();
+        this.rewriteConstraints = rewriteConstraints != null ?
+            new ArrayList<>(rewriteConstraints) : Collections.emptyList();
+        this.ruleLineNumber = ruleLineNumber;
     }
 
     /**
@@ -155,17 +177,6 @@ public class RuleAnalysisContext {
                 parent.put(ra, rb);
             }
         }
-    }
-
-    /**
-     * Compute a full signature: pre-order traversal of node class names plus
-     * placeholder symbol names at each node. This distinguishes rules that have
-     * the same tree shape but different symbol bindings.
-     */
-    private static String fullSignature(RelNode node) {
-        StringBuilder sb = new StringBuilder();
-        buildFullSignature(node, sb, Collections.emptyMap());
-        return sb.toString();
     }
 
     /**

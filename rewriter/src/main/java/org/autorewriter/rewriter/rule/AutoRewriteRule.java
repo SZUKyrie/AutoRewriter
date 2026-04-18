@@ -35,6 +35,7 @@ import java.util.*;
 public class AutoRewriteRule extends RelOptRule {
 
     private final int ruleId;
+    private final RuleAnalysisContext ruleContext;
     private final RelNode sourceTemplate;
     private final RelNode targetTemplate;
     private final Constraints constraints;
@@ -48,6 +49,8 @@ public class AutoRewriteRule extends RelOptRule {
     public int getRuleId() { return ruleId; }
     public RelNode getSourceTemplate() { return sourceTemplate; }
     public RelNode getTargetTemplate() { return targetTemplate; }
+
+    public int getRuleLineNumber() { return this.ruleContext.getRuleLineNumber(); }
 
     public AutoRewriteRule(RelOptRuleOperand operand, RuleAnalysisContext ruleContext) {
         this(operand, ruleContext, -1);
@@ -63,6 +66,7 @@ public class AutoRewriteRule extends RelOptRule {
                 + (ruleId >= 0 ? ruleId : System.identityHashCode(ruleContext))
                 + descSuffix);
         this.ruleId = ruleId;
+        this.ruleContext = ruleContext;
         this.sourceTemplate = ruleContext.getSourceRelNode();
         this.targetTemplate = ruleContext.getTargetRelNode();
 
