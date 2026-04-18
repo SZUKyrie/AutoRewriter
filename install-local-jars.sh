@@ -65,6 +65,91 @@ else
 fi
 
 echo ""
+
+# Install ShardingSphere Parser SQL Engine Core
+echo "Installing ShardingSphere Parser SQL Engine Core..."
+if [ -f "libs/shardingsphere-parser-sql-engine-core-5.5.3-SNAPSHOT.jar" ]; then
+    mvn install:install-file \
+      -Dfile=libs/shardingsphere-parser-sql-engine-core-5.5.3-SNAPSHOT.jar \
+      -DgroupId=org.apache.shardingsphere \
+      -DartifactId=shardingsphere-parser-sql-engine-core \
+      -Dversion=5.5.3-SNAPSHOT \
+      -Dpackaging=jar
+    echo "✓ ShardingSphere Parser SQL Engine Core installed successfully"
+else
+    echo "ERROR: libs/shardingsphere-parser-sql-engine-core-5.5.3-SNAPSHOT.jar not found!"
+    exit 1
+fi
+
+echo ""
+
+# Install ShardingSphere Infra Exception
+echo "Installing ShardingSphere Infra Exception..."
+if [ -f "libs/shardingsphere-infra-exception-5.5.3-SNAPSHOT.jar" ]; then
+    mvn install:install-file \
+      -Dfile=libs/shardingsphere-infra-exception-5.5.3-SNAPSHOT.jar \
+      -DgroupId=org.apache.shardingsphere \
+      -DartifactId=shardingsphere-infra-exception \
+      -Dversion=5.5.3-SNAPSHOT \
+      -Dpackaging=jar
+    echo "✓ ShardingSphere Infra Exception installed successfully"
+else
+    echo "ERROR: libs/shardingsphere-infra-exception-5.5.3-SNAPSHOT.jar not found!"
+    exit 1
+fi
+
+echo ""
+
+# Install ShardingSphere Parser SQL Statement Core
+echo "Installing ShardingSphere Parser SQL Statement Core..."
+if [ -f "libs/shardingsphere-parser-sql-statement-core-5.5.3-SNAPSHOT.jar" ]; then
+    mvn install:install-file \
+      -Dfile=libs/shardingsphere-parser-sql-statement-core-5.5.3-SNAPSHOT.jar \
+      -DgroupId=org.apache.shardingsphere \
+      -DartifactId=shardingsphere-parser-sql-statement-core \
+      -Dversion=5.5.3-SNAPSHOT \
+      -Dpackaging=jar
+    echo "✓ ShardingSphere Parser SQL Statement Core installed successfully"
+else
+    echo "ERROR: libs/shardingsphere-parser-sql-statement-core-5.5.3-SNAPSHOT.jar not found!"
+    exit 1
+fi
+
+echo ""
+
+# Install ShardingSphere Parser SQL Engine Rewiter
+echo "Installing ShardingSphere Parser SQL Engine Rewiter..."
+if [ -f "libs/shardingsphere-parser-sql-engine-rewiter-5.5.3-SNAPSHOT.jar" ]; then
+    mvn install:install-file \
+      -Dfile=libs/shardingsphere-parser-sql-engine-rewiter-5.5.3-SNAPSHOT.jar \
+      -DgroupId=org.apache.shardingsphere \
+      -DartifactId=shardingsphere-parser-sql-engine-rewiter \
+      -Dversion=5.5.3-SNAPSHOT \
+      -Dpackaging=jar
+    echo "✓ ShardingSphere Parser SQL Engine Rewiter installed successfully"
+else
+    echo "ERROR: libs/shardingsphere-parser-sql-engine-rewiter-5.5.3-SNAPSHOT.jar not found!"
+    exit 1
+fi
+
+echo ""
+
+# Install ShardingSphere SQL Federation Compiler
+echo "Installing ShardingSphere SQL Federation Compiler..."
+if [ -f "libs/shardingsphere-sql-federation-compiler-5.5.3-SNAPSHOT.jar" ]; then
+    mvn install:install-file \
+      -Dfile=libs/shardingsphere-sql-federation-compiler-5.5.3-SNAPSHOT.jar \
+      -DgroupId=org.apache.shardingsphere \
+      -DartifactId=shardingsphere-sql-federation-compiler \
+      -Dversion=5.5.3-SNAPSHOT \
+      -Dpackaging=jar
+    echo "✓ ShardingSphere SQL Federation Compiler installed successfully"
+else
+    echo "ERROR: libs/shardingsphere-sql-federation-compiler-5.5.3-SNAPSHOT.jar not found!"
+    exit 1
+fi
+
+echo ""
 echo "=========================================="
 echo "✓ All JARs have been installed to your local Maven repository"
 echo "=========================================="
